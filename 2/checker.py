@@ -59,7 +59,7 @@ tests = [
 	"f = open('test.txt', 'w')\\n\\\n"\
 	"f.write('Text\\\\\\n')\\n\\\n"\
 	"f.close()\\n\" > test.py",
-"python test.py | exit 0",
+"python test.py | exit 123",
 "cat test.txt",
 ],
 [
@@ -134,7 +134,7 @@ for i in range(line_count):
 	print(output[i])
 	if output[i] != etalon[i]:
 		print('Error in line {}. '\
-		      'Expected:\n{}'.format(i + 1, etalon[i]))
+		      '\n\tExpected: "{}"'.format(i + 1, etalon[i]))
 		is_error = True
 		break
 if not is_error and etalon_len != output_len:
