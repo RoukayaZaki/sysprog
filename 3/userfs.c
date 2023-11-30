@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 enum
 {
 	BLOCK_SIZE = 512,
@@ -47,6 +48,7 @@ struct file
 	/* PUT HERE OTHER MEMBERS */
 	int block_num;
 	bool is_deleted;
+	int size;
 };
 
 /** List of all files. */
@@ -107,6 +109,7 @@ int ufs_open(const char *filename, int flags)
 		new_file->next = file_list;
 		new_file->prev = NULL;
 		new_file->is_deleted = false;
+		new_file->size = 0;
 		if (file_list != NULL)
 		{
 			file_list->prev = new_file;
@@ -202,6 +205,13 @@ ufs_write(int fd, const char *buf, size_t size)
 		f->block_num++;
 	}
 	struct block *current_block = f->block_list;
+	// printf("File size: %d, cursor: %d\n", f->size, desc->cursor);
+	if (f->size < desc->cursor)
+	{
+		// printf("Check Entrance\n");
+		desc->cursor = f->size;
+		// printf("Resizing cursor to: %d\n", f->size);
+	}
 	int cursor = desc->cursor % BLOCK_SIZE, block_idx = desc->cursor / BLOCK_SIZE;
 	while (block_idx--)
 	{
@@ -228,10 +238,14 @@ ufs_write(int fd, const char *buf, size_t size)
 		cursor = 0;
 	}
 	size_t bytes_written = 0;
+	// printf("Will write: '%s'\n", buf);
 	while (bytes_written < size)
 	{
 		size_t bytes_to_write = ((size - bytes_written) < (size_t)(BLOCK_SIZE - cursor)) ? (size - bytes_written) : (size_t)(BLOCK_SIZE - cursor);
+		// printf("Bytes written: %ld, Bytes to write: %ld\n", bytes_written, bytes_to_write);
+		// printf("Cursor: %d\n", cursor);
 		memcpy(current_block->memory + cursor, buf + bytes_written, bytes_to_write);
+		// printf("Current memory: '%s'\n", current_block->memory);
 		current_block->occupied = ((int)(cursor + bytes_to_write) > current_block->occupied) ? (int)(cursor + bytes_to_write) : current_block->occupied;
 		bytes_written += bytes_to_write;
 		if (current_block->next == NULL && bytes_written < size)
@@ -252,6 +266,9 @@ ufs_write(int fd, const char *buf, size_t size)
 		current_block = current_block->next;
 	}
 	desc->cursor += bytes_written;
+	if (desc->cursor > f->size)
+		f->size = desc->cursor;
+	// f->size = (f->block_num - 1) * BLOCK_SIZE + f->last_block->occupied;
 	return bytes_written;
 }
 
@@ -276,6 +293,10 @@ ufs_read(int fd, char *buf, size_t size)
 		return -1;
 	}
 	struct file *f = desc->file;
+	if (f->size < desc->cursor)
+	{
+		desc->cursor = f->size;
+	}
 	struct block *current_block = f->block_list;
 	int cursor = desc->cursor % BLOCK_SIZE, block_idx = desc->cursor / BLOCK_SIZE;
 	while (block_idx--)
@@ -286,6 +307,7 @@ ufs_read(int fd, char *buf, size_t size)
 
 	while (bytes_read < size && current_block != NULL)
 	{
+		// printf("Current block occupied: %d, cursor: %d\n", current_block->occupied, cursor);
 		size_t bytes_available = current_block->occupied - cursor;
 
 		if (bytes_available > 0)
@@ -303,7 +325,7 @@ ufs_read(int fd, char *buf, size_t size)
 			cursor = 0;
 		}
 	}
-	
+
 	desc->cursor += bytes_read;
 	return bytes_read;
 }
@@ -390,6 +412,56 @@ int ufs_delete(const char *filename)
 	return 0;
 }
 
+int ufs_resize(int fd, size_t new_size)
+{
+	if (fd >= file_descriptor_capacity || fd < 0)
+	{
+		ufs_error_code = UFS_ERR_NO_FILE;
+		return -1;
+	}
+	struct filedesc *desc = file_descriptors[fd];
+	if (desc == NULL || desc->file == NULL)
+	{
+		ufs_error_code = UFS_ERR_NO_FILE;
+		return -1;
+	}
+	if (desc->flags == 1)
+	{
+		ufs_error_code = UFS_ERR_NO_PERMISSION;
+		return -1;
+	}
+	if (new_size > MAX_FILE_SIZE)
+	{
+		ufs_error_code = UFS_ERR_NO_MEM;
+		return -1;
+	}
+	if (new_size >= (size_t)desc->file->size)
+	{
+		return 0;
+	}
+
+	int cursor = new_size % BLOCK_SIZE, block_idx = new_size / BLOCK_SIZE;
+	struct file *f = desc->file;
+	struct block *current_block = f->block_list;
+	while (block_idx--)
+	{
+		current_block = current_block->next;
+	}
+	current_block->occupied = cursor;
+	f->last_block = current_block;
+	struct block *original_current_block = current_block;
+	current_block = current_block->next;
+	while (current_block != NULL)
+	{
+		struct block *next = current_block->next;
+		free(current_block->memory);
+		free(current_block);
+		current_block = next;
+	}
+	original_current_block->next = NULL;
+	f->size = new_size;
+	return 0;
+}
 
 void ufs_destroy(void)
 {
