@@ -1,6 +1,9 @@
 #include "chat.h"
 #include "chat_server.h"
-
+#include <sys/socket.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,16 +13,20 @@ struct chat_peer {
 	/** Client's socket. To read/write messages. */
 	int socket;
 	/** Output buffer. */
+	struct chat_message *outbox;
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
+	int outbox_size;
 };
 
 struct chat_server {
 	/** Listening socket. To accept new clients. */
 	int socket;
 	/** Array of peers. */
+	struct chat_peer *peers[1024];
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
+	int peers_size;
 };
 
 struct chat_server *
@@ -29,7 +36,7 @@ chat_server_new(void)
 	server->socket = -1;
 
 	/* IMPLEMENT THIS FUNCTION */
-
+	server->peers_size = 0;
 	return server;
 }
 
@@ -60,9 +67,26 @@ chat_server_listen(struct chat_server *server, uint16_t port)
 	 * 4) Create epoll/kqueue if needed.
 	 */
 	/* IMPLEMENT THIS FUNCTION */
-	(void)server;
+	if(server->socket != -1)
+	{
+		return CHAT_ERR_ALREADY_STARTED;
+	}
+	server->socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (server->socket == -1) {
+		return CHAT_ERR_SYS;
+	}
+	fcntl(server->socket, F_SETFL, O_NONBLOCK | fcntl(server->socket, F_GETFL, 0));
+	if (bind(server->socket, (struct sockaddr *) &addr, sizeof(addr)) == -1)
+	{
+		return CHAT_ERR_PORT_BUSY;
+	}
 
-	return CHAT_ERR_NOT_IMPLEMENTED;
+	if (listen(server->socket, 1024) == -1) {
+		return CHAT_ERR_SYS;
+	}
+
+	// TODO: create epoll;
+	return 0;
 }
 
 struct chat_message *
@@ -84,8 +108,13 @@ chat_server_update(struct chat_server *server, double timeout)
 	 * 2.2) If the update was on a client-socket, then you might want to
 	 *     read/write on it.
 	 */
-	(void)server;
-	(void)timeout;
+	// Error handling
+	if(server->socket == -1)
+	{
+		return CHAT_ERR_NOT_STARTED;
+	}
+	(void) timeout;
+	// TODO: actual implemantation
 	return CHAT_ERR_NOT_IMPLEMENTED;
 }
 
@@ -122,11 +151,19 @@ chat_server_get_socket(const struct chat_server *server)
 int
 chat_server_get_events(const struct chat_server *server)
 {
+
 	/*
 	 * IMPLEMENT THIS FUNCTION - add OUTPUT event if has non-empty output
 	 * buffer in any of the client-sockets.
 	 */
-	(void)server;
+	for(int i = 0; i < server->peers_size; i++)
+	{
+		if(server->peers[i]->outbox_size > 0)
+		{
+			return CHAT_EVENT_OUTPUT | CHAT_EVENT_INPUT;
+		}
+	}
+	if(server->socket == -1) return 0;
 	return CHAT_EVENT_INPUT;
 }
 
