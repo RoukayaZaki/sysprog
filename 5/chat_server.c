@@ -54,7 +54,12 @@ void chat_server_delete(struct chat_server *server)
 
 	free(server);
 }
-
+void
+make_fd_nonblocking(int fd)
+{
+	int old_flags = fcntl(fd, F_GETFL);
+	fcntl(fd, F_SETFL, old_flags | O_NONBLOCK);
+}
 int chat_server_listen(struct chat_server *server, uint16_t port)
 {
 	struct sockaddr_in addr;
@@ -79,7 +84,7 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
 	{
 		return CHAT_ERR_SYS;
 	}
-	fcntl(server->socket, F_SETFL, O_NONBLOCK | fcntl(server->socket, F_GETFL, 0));
+	make_fd_nonblocking(server->socket);
 	if (bind(server->socket, (struct sockaddr *)&addr, sizeof(addr)) == -1)
 	{
 		return CHAT_ERR_PORT_BUSY;
@@ -96,7 +101,7 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
 		return CHAT_ERR_SYS;
 	}
 
-	server->event.events = EPOLLIN;
+	server->event.events = EPOLLIN | EPOLLET;
 	server->event.data.fd = server->socket;
 	if (epoll_ctl(server->epollfd, EPOLL_CTL_ADD, server->socket, &server->event) == -1)
 	{
@@ -149,8 +154,8 @@ int chat_server_update(struct chat_server *server, double timeout)
 			{
 				return CHAT_ERR_SYS;
 			}
-			fcntl(new_client_fd, F_SETFL, O_NONBLOCK | fcntl(new_client_fd, F_GETFL, 0));
-			server->event.events = EPOLLIN | EPOLLOUT;
+			make_fd_nonblocking(new_client_fd);
+			server->event.events = EPOLLIN | EPOLLOUT | EPOLLET;
 			server->event.data.fd = new_client_fd;
 			if (epoll_ctl(server->epollfd, EPOLL_CTL_ADD, new_client_fd, &server->event) == -1)
 			{

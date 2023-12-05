@@ -23,8 +23,8 @@ struct chat_message {
 #endif
 	/** 0-terminate text. */
 	char *data;
-
 	/* PUT HERE OTHER MEMBERS */
+	int size;
 };
 
 /** Free message's memory. */

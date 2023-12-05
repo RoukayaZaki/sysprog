@@ -8,20 +8,25 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <poll.h>
+#include <stdbool.h>
 
+#define MAX_EVENTS 1024
 struct chat_client
 {
 	/** Socket connected to the server. */
 	int socket;
 	/** Array of received messages. */
-	struct chat_message *recieved_msgs;
+	struct chat_message recieved_msgs[1024];
 	/* ... */
 	/** Output buffer. */
-	struct chat_message *sent_msgs;
+	struct chat_message sent_msgs[1024];
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
 	int sent;
+	int to_send;
 	int recieved;
+	struct pollfd fd;
 };
 
 struct chat_client *
@@ -34,7 +39,7 @@ chat_client_new(const char *name)
 	client->socket = -1;
 
 	/* IMPLEMENT THIS FUNCTION */
-	client->recieved = client->sent = 0;
+	client->recieved = client->sent = client->to_send = 0;
 
 	return client;
 }
@@ -90,26 +95,32 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 		freeaddrinfo(address);
 		return CHAT_ERR_SYS;
 	}
-	for(struct addrinfo *prop = address; prop != NULL; prop = prop->ai_next)
+	for (struct addrinfo *prop = address; prop != NULL; prop = prop->ai_next)
 	{
 		client->socket = socket(prop->ai_family, prop->ai_socktype, prop->ai_protocol);
-        if (client->socket == -1) {
-            continue; 
-        }
+		if (client->socket == -1)
+		{
+			continue;
+		}
 
-        if (connect(client->socket, prop->ai_addr, prop->ai_addrlen) != -1) {
-            break; 
-        }
+		if (connect(client->socket, prop->ai_addr, prop->ai_addrlen) != -1)
+		{
+			break;
+		}
 
-        close(client->socket);
-        client->socket = -1;
+		close(client->socket);
+		client->socket = -1;
 	}
 	freeaddrinfo(address);
 
-    if (client->socket == -1) {
-        perror("Failed to connect");
-        return CHAT_ERR_SYS;
-    }
+	if (client->socket == -1)
+	{
+		perror("Failed to connect");
+		return CHAT_ERR_SYS;
+	}
+
+	client->fd.fd = client->socket;
+	client->fd.events = POLLIN;
 	return 0;
 }
 
@@ -132,13 +143,83 @@ int chat_client_update(struct chat_client *client, double timeout)
 	 * events (do read/write).
 	 */
 
-	if(client->socket == -1)
+	if (client->socket == -1)
 	{
 		return CHAT_ERR_NOT_STARTED;
 	}
 
-	(void)timeout;
-	return CHAT_ERR_NOT_IMPLEMENTED;
+	if (client->sent - client->to_send > 0)
+	{
+		client->fd.events |= POLLOUT;
+	}
+	client->fd.revents = 0;
+	int ret = poll(&client->fd, 1, timeout * 1000);
+	if (ret == -1)
+	{
+		perror("poll");
+		
+		return CHAT_ERR_SYS;
+	}
+	else if (ret == 0)
+	{
+		return CHAT_ERR_TIMEOUT;
+	}
+	
+	if (client->fd.revents & POLLIN)
+	{
+		// printf("Incoming\n");
+		// TODO: Handle incoming data
+		char buffer[2048];
+		ssize_t bytes_read = recv(client->socket, buffer, sizeof(buffer), 0);
+
+		if (bytes_read == -1)
+		{
+			// Error handling
+
+			perror("recv");
+			return CHAT_ERR_SYS;
+		}
+		else if (bytes_read == 0)
+		{
+			// Connection closed
+			printf("Server closed the connection\n");
+			close(client->socket);
+			return 0;
+		}
+		else
+		{
+			client->recieved_msgs[client->recieved].data = strdup(buffer);
+			client->recieved_msgs[client->recieved].size = (int)bytes_read;
+			client->recieved++;
+		}
+	}
+
+	if (client->fd.revents & POLLOUT)
+	{
+		// printf("Outgoing\n");
+
+		// TODO: Handle outgoing data
+		
+		ssize_t bytes_sent = send(client->socket, client->sent_msgs[client->to_send].data, client->sent_msgs[client->to_send].size, 0);
+		if (bytes_sent == -1)
+		{
+			perror("send");
+			
+			return CHAT_ERR_SYS;
+		}
+		if(bytes_sent == 0)
+		{
+			close(client->socket);
+			return 0;
+		}
+		client->to_send++;
+		client->fd.events = POLLIN;
+		// for (; client->to_send < client->sent; client->to_send++)
+		// {
+		// }
+		// printf("%d %d\n", client->to_send, client->sent);
+	}
+	return 0;
 }
 
 int chat_client_get_descriptor(const struct chat_client *client)
@@ -153,19 +234,44 @@ int chat_client_get_events(const struct chat_client *client)
 	 * buffer.
 	 */
 
-	if(client->sent != 0)
+	if (client->sent != 0)
 	{
 		return CHAT_EVENT_OUTPUT | CHAT_EVENT_INPUT;
 	}
-	if(client->socket == -1) return 0;
+	if (client->socket == -1)
+		return 0;
 	return CHAT_EVENT_INPUT;
 }
 
 int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_size)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	(void)client;
-	(void)msg;
-	(void)msg_size;
-	return CHAT_ERR_NOT_IMPLEMENTED;
+	if (client->socket == -1)
+	{
+		return CHAT_ERR_NOT_STARTED;
+	}
+	bool new_msg = true;
+	int cursor = 0;
+	for (uint32_t i = 0; i < msg_size; i++)
+	{
+		if (new_msg)
+		{
+
+			client->sent_msgs[client->sent].data = malloc(sizeof(char) * 1024);
+			// printf("HERE\n");
+			new_msg = false;
+			cursor = 0;
+			client->sent_msgs[client->sent].size = 0;
+		}
+		client->sent_msgs[client->sent].data[cursor] = msg[i];
+		client->sent_msgs[client->sent].size++;
+		if (msg[i] == '\n')
+		{
+			client->fd.events |= POLLOUT;
+			client->sent++;
+			new_msg = true;
+			continue;
+		}
+	}
+
+	return 0;
 }
