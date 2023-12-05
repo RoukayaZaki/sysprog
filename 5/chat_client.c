@@ -10,6 +10,7 @@
 #include <sys/epoll.h>
 #include <poll.h>
 #include <stdbool.h>
+#define _GNU_SOURCE
 
 #define MAX_EVENTS 1024
 struct chat_client
@@ -20,12 +21,15 @@ struct chat_client
 	struct chat_message recieved_msgs[1024];
 	/* ... */
 	/** Output buffer. */
-	struct chat_message sent_msgs[1024];
+	char *sent_buffer;
+	char *last_message;
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
+	int sending;
 	int sent;
-	int to_send;
 	int recieved;
+	int size;
+	int cursor;
 	struct pollfd fd;
 };
 
@@ -39,7 +43,8 @@ chat_client_new(const char *name)
 	client->socket = -1;
 
 	/* IMPLEMENT THIS FUNCTION */
-	client->recieved = client->sent = client->to_send = 0;
+	client->recieved = client->sending = client->sent = client->size = client->cursor = 0;
+	client->sent_buffer = client->last_message = NULL;
 
 	return client;
 }
@@ -54,10 +59,8 @@ void chat_client_delete(struct chat_client *client)
 	{
 		free(client->recieved_msgs[i].data);
 	}
-	for (int i = 0; i < client->sent; i++)
-	{
-		free(client->sent_msgs[i].data);
-	}
+	free(client->last_message);
+	free(client->sent_buffer);
 	free(client);
 }
 
@@ -100,6 +103,8 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 		client->socket = socket(prop->ai_family, prop->ai_socktype, prop->ai_protocol);
 		if (client->socket == -1)
 		{
+			close(client->socket);
+			client->socket = -1;
 			continue;
 		}
 
@@ -107,12 +112,11 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 		{
 			break;
 		}
-
-		close(client->socket);
-		client->socket = -1;
 	}
 	freeaddrinfo(address);
-
+	free(editable_addr);
+	// free(host);
+	// free(port);
 	if (client->socket == -1)
 	{
 		perror("Failed to connect");
@@ -148,7 +152,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 		return CHAT_ERR_NOT_STARTED;
 	}
 
-	if (client->sent - client->to_send > 0)
+	if (client->sending - client->sent > 0)
 	{
 		client->fd.events |= POLLOUT;
 	}
@@ -157,14 +161,14 @@ int chat_client_update(struct chat_client *client, double timeout)
 	if (ret == -1)
 	{
 		perror("poll");
-		
+
 		return CHAT_ERR_SYS;
 	}
 	else if (ret == 0)
 	{
 		return CHAT_ERR_TIMEOUT;
 	}
-	
+
 	if (client->fd.revents & POLLIN)
 	{
 		// printf("Incoming\n");
@@ -197,27 +201,32 @@ int chat_client_update(struct chat_client *client, double timeout)
 	if (client->fd.revents & POLLOUT)
 	{
 		// printf("Outgoing\n");
+		ssize_t total_bytes_sent = 0;
+		while ((int)total_bytes_sent < client->size)
+		{
+			ssize_t bytes_sent = send(client->socket, client->sent_buffer + total_bytes_sent, client->size - total_bytes_sent, 0);
+			if (bytes_sent == -1)
+			{
+				perror("send");
 
-		// TODO: Handle outgoing data
-		
-		ssize_t bytes_sent = send(client->socket, client->sent_msgs[client->to_send].data, client->sent_msgs[client->to_send].size, 0);
-		if (bytes_sent == -1)
-		{
-			perror("send");
-			
-			return CHAT_ERR_SYS;
+				return CHAT_ERR_SYS;
+			}
+			if (bytes_sent == 0)
+			{
+				close(client->socket);
+				return 0;
+			}
+			// printf("Bytes sending: %ld Message: %s\n", bytes_sent, client->sent_msgs[client->sent].data);
+			total_bytes_sent += bytes_sent;
 		}
-		if(bytes_sent == 0)
-		{
-			close(client->socket);
-			return 0;
-		}
-		client->to_send++;
 		client->fd.events = POLLIN;
-		// for (; client->to_send < client->sent; client->to_send++)
+		client->size = 0;
+		free(client->sent_buffer);
+		client->sent_buffer = NULL;
+		// for (; client->sent < client->sending; client->sent++)
 		// {
 		// }
-		// printf("%d %d\n", client->to_send, client->sent);
+		// printf("%d %d\n", client->sent, client->sending);
 	}
 	return 0;
 }
@@ -234,7 +243,7 @@ int chat_client_get_events(const struct chat_client *client)
 	 * buffer.
 	 */
 
-	if (client->sent != 0)
+	if (client->sending != 0)
 	{
 		return CHAT_EVENT_OUTPUT | CHAT_EVENT_INPUT;
 	}
@@ -242,36 +251,58 @@ int chat_client_get_events(const struct chat_client *client)
 		return 0;
 	return CHAT_EVENT_INPUT;
 }
+// reference: https://stackoverflow.com/questions/122616/how-do-i-trim-leading-trailing-whitespace-in-a-standard-way
+char *trimwhitespace(char *str)
+{
+	char *end;
 
+	while (isspace((unsigned char)*str))
+		str++;
+
+	if (*str == 0)
+		return str;
+
+	end = str + strlen(str) - 1;
+	while (end > str && isspace((unsigned char)*end))
+		end--;
+
+	end[1] = '\0';
+
+	return str;
+}
 int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_size)
 {
 	if (client->socket == -1)
 	{
 		return CHAT_ERR_NOT_STARTED;
 	}
-	bool new_msg = true;
-	int cursor = 0;
-	for (uint32_t i = 0; i < msg_size; i++)
-	{
-		if (new_msg)
-		{
+	char *modifiable_msg = strdup(msg);
 
-			client->sent_msgs[client->sent].data = malloc(sizeof(char) * 1024);
-			// printf("HERE\n");
-			new_msg = false;
-			cursor = 0;
-			client->sent_msgs[client->sent].size = 0;
-		}
-		client->sent_msgs[client->sent].data[cursor] = msg[i];
-		client->sent_msgs[client->sent].size++;
-		if (msg[i] == '\n')
+	int size = 0, start = 0;
+	if (client->last_message == NULL)
+		client->last_message = calloc(msg_size, sizeof(char));
+	else
+	{
+		size = client->cursor;
+		client->last_message = realloc(client->last_message, (int)size + msg_size);
+	}
+	for (int i = 0; i <= (int)msg_size; i++)
+	{
+		client->last_message[size] = modifiable_msg[i];
+		size++;
+		if (modifiable_msg[i] == '\n')
 		{
+			client->last_message[size] = '\0';
+			client->last_message = trimwhitespace(client->last_message);
+			client->sent_buffer = realloc(client->sent_buffer, client->size + size);
+			memcpy(client->sent_buffer + client->size, client->last_message, size);
+			client->size += size;
+			size = 0;
+			client->cursor = 0;
+			start = i + 1;
 			client->fd.events |= POLLOUT;
-			client->sent++;
-			new_msg = true;
-			continue;
 		}
 	}
-
+	free(modifiable_msg);
 	return 0;
 }
