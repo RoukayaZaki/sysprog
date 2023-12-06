@@ -131,9 +131,22 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 struct chat_message *
 chat_client_pop_next(struct chat_client *client)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	(void)client;
-	return NULL;
+	if(client->recieved == 0)
+	{
+		return NULL;
+	}
+
+	struct chat_message *msg = malloc(sizeof(struct chat_message));
+	msg->data = strdup(client->recieved_msgs[0].data);
+	msg->size = client->recieved_msgs[0].size;
+	for(int j = 1; j < client->recieved; j++)
+	{
+		client->recieved_msgs[j - 1] = client->recieved_msgs[j];
+	} 
+	free(client->recieved_msgs[client->recieved - 1].data);
+	client->recieved--;
+	
+	return msg;
 }
 
 int chat_client_update(struct chat_client *client, double timeout)
@@ -171,40 +184,64 @@ int chat_client_update(struct chat_client *client, double timeout)
 
 	if (client->fd.revents & POLLIN)
 	{
-		// printf("Incoming\n");
-		// TODO: Handle incoming data
-		char buffer[2048];
-		ssize_t bytes_read = recv(client->socket, buffer, sizeof(buffer), 0);
+		// MightTODO: dynamic allocation
+		char *buffer = malloc(2048 * sizeof(char));
+		int total_bytes_read = 0;
+		while (true)
+		{
+			int bytes_read = recv(client->socket, buffer + total_bytes_read, sizeof(buffer) - total_bytes_read, MSG_DONTWAIT);
 
-		if (bytes_read == -1)
-		{
-			// Error handling
-
-			perror("recv");
-			return CHAT_ERR_SYS;
+			if (bytes_read == -1)
+			{
+				perror("recv");
+				// return CHAT_ERR_SYS;
+				break;
+			}
+			else if (bytes_read == 0)
+			{
+				printf("Server closed the connection\n");
+				close(client->socket);
+				// return 0;
+				break;
+			}
+			else
+			{
+				total_bytes_read += bytes_read;
+				if(total_bytes_read == sizeof(buffer))
+				{
+					buffer = realloc(buffer, sizeof(buffer) * 2);
+				}
+			}
 		}
-		else if (bytes_read == 0)
+		int start = 0;
+		for(int idx = 0; idx < total_bytes_read; idx++)
 		{
-			// Connection closed
-			printf("Server closed the connection\n");
-			close(client->socket);
-			return 0;
+			if(buffer[idx] == '\n' || idx == total_bytes_read - 1)
+			{
+				int size = idx - start - 1;
+				client->recieved_msgs[client->recieved].data = calloc(size, sizeof(char));
+				memcpy(client->recieved_msgs[client->recieved].data, buffer + start, size);
+				client->recieved_msgs[client->recieved].size = size;
+				client->recieved++;
+				start = idx + 1;
+				free(client->last_message);
+				client->last_message = NULL;
+			}
 		}
-		else
-		{
-			client->recieved_msgs[client->recieved].data = strdup(buffer);
-			client->recieved_msgs[client->recieved].size = (int)bytes_read;
-			client->recieved++;
-		}
+		free(buffer);
 	}
 
 	if (client->fd.revents & POLLOUT)
 	{
 		// printf("Outgoing\n");
-		ssize_t total_bytes_sent = 0;
+		// client->sent_buffer[strlen(client->sent_buffer) - 1] = '\0';
+		client->sent_buffer = realloc(client->sent_buffer, client->size + 1);
+		client->sent_buffer[client->size] = '\0';
+		client->size++;
+		int total_bytes_sent = 0;
 		while ((int)total_bytes_sent < client->size)
 		{
-			ssize_t bytes_sent = send(client->socket, client->sent_buffer + total_bytes_sent, client->size - total_bytes_sent, 0);
+			int bytes_sent = send(client->socket, client->sent_buffer + total_bytes_sent, client->size - total_bytes_sent, 0);
 			if (bytes_sent == -1)
 			{
 				perror("send");
@@ -216,17 +253,14 @@ int chat_client_update(struct chat_client *client, double timeout)
 				close(client->socket);
 				return 0;
 			}
-			// printf("Bytes sending: %ld Message: %s\n", bytes_sent, client->sent_msgs[client->sent].data);
+			printf("Bytes sending: %ld\n", bytes_sent);
 			total_bytes_sent += bytes_sent;
 		}
 		client->fd.events = POLLIN;
 		client->size = 0;
 		free(client->sent_buffer);
 		client->sent_buffer = NULL;
-		// for (; client->sent < client->sending; client->sent++)
-		// {
-		// }
-		// printf("%d %d\n", client->sent, client->sending);
+
 	}
 	return 0;
 }
@@ -252,21 +286,25 @@ int chat_client_get_events(const struct chat_client *client)
 	return CHAT_EVENT_INPUT;
 }
 // reference: https://stackoverflow.com/questions/122616/how-do-i-trim-leading-trailing-whitespace-in-a-standard-way
-char *trimwhitespace(char *str)
+char *trimwhitespace(char *str, int size)
 {
-	char *end;
 
-	while (isspace((unsigned char)*str))
+	while (str[0] == ' ')
+	{
 		str++;
+		size--;
+	}
 
 	if (*str == 0)
 		return str;
 
-	end = str + strlen(str) - 1;
-	while (end > str && isspace((unsigned char)*end))
-		end--;
+	// end = str + strlen(str) - 1;
+	while (size > 0 && str[size - 1] == ' ')
+		size--;
 
-	end[1] = '\0';
+	str = realloc(str, size + 2);
+	printf("trim: %d\n", size);
+	str[size + 1] = '\0';
 
 	return str;
 }
@@ -276,26 +314,31 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 	{
 		return CHAT_ERR_NOT_STARTED;
 	}
-	char *modifiable_msg = strdup(msg);
+	// char *msg = strdup((char*)msg);
 
 	int size = 0, start = 0;
 	if (client->last_message == NULL)
-		client->last_message = calloc(msg_size, sizeof(char));
+		client->last_message = calloc(msg_size + 1, sizeof(char));
 	else
 	{
 		size = client->cursor;
-		client->last_message = realloc(client->last_message, (int)size + msg_size);
+		client->last_message = realloc(client->last_message, (int)size + msg_size + 1);
 	}
-	for (int i = 0; i <= (int)msg_size; i++)
+	for (int i = 0; i < (int)msg_size; i++)
 	{
-		client->last_message[size] = modifiable_msg[i];
+		client->last_message[size] = msg[i];
+		client->cursor++;
 		size++;
-		if (modifiable_msg[i] == '\n')
+		if (msg[i] == '\n')
 		{
 			client->last_message[size] = '\0';
-			client->last_message = trimwhitespace(client->last_message);
+			printf("size before trim: %d\n", size);
+			client->last_message = trimwhitespace(client->last_message, size);
+			client->last_message[strlen(client->last_message) - 1] = '\n';
 			client->sent_buffer = realloc(client->sent_buffer, client->size + size);
 			memcpy(client->sent_buffer + client->size, client->last_message, size);
+			// printf("client buffer after trimming: %s, to send buffer: %s\n", client->sent_buffer, client->sent_buffer);
+
 			client->size += size;
 			size = 0;
 			client->cursor = 0;
@@ -303,6 +346,6 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 			client->fd.events |= POLLOUT;
 		}
 	}
-	free(modifiable_msg);
+	// free(msg);
 	return 0;
 }
