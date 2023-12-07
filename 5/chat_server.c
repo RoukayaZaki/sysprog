@@ -204,7 +204,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 		// do_use_fd(events[i].data.fd);
 		if (events[i].events & EPOLLIN)
 		{
-			printf("Incoming server\n");
+			// printf("Incoming server\n");
 
 			char *buffer = calloc(2048, sizeof(char));
 			int total_bytes_read = 0, capacity = 2048;
@@ -221,7 +221,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 					capacity *= 2;
 				}
 			}
-			printf("Bytes recieved: %ld, \n", total_bytes_read);
+			// printf("Bytes recieved: %ld, \n", total_bytes_read);
 			// Connection closed, delete peer
 			if (total_bytes_read == 0)
 			{
@@ -253,13 +253,14 @@ int chat_server_update(struct chat_server *server, double timeout)
 				if (buffer[idx] == '\n')
 				{
 					int size = idx - start;
+					// printf("Let's put message in server of size: %d with starting char: %c\n", size, buffer[start + 1]);
 					server->to_be_sent[server->recieved].data = calloc(size + 1, sizeof(char));
 					memcpy(server->to_be_sent[server->recieved].data, buffer + start, size);
 					server->to_be_sent[server->recieved].size = size;
 					// printf("Server Message: %s", server->to_be_sent[server->recieved]);
 					server->to_be_sent[server->recieved].data[size] = '\0';
 					server->recieved++;
-					start = idx + 1;
+					start = idx + 2;
 				}
 			}
 			// printf("Message recieved: %s\n", server->to_be_sent[server->recieved-1].data);
@@ -282,11 +283,11 @@ int chat_server_update(struct chat_server *server, double timeout)
 				server->peers[j].outbox_size += total_bytes_read;
 			}
 			free(buffer);
-			printf("Server recieved: %d messages\n", server->recieved);
+			// printf("Server recieved: %d messages\n", server->recieved);
 		}
 		if (events[i].events & EPOLLOUT)
 		{
-			printf("Outgoing Server\n");
+			// printf("Outgoing Server\n");
 			events[i].events &= ~EPOLLOUT;
 			if(epoll_ctl(server->epollfd, EPOLL_CTL_MOD, events[i].data.fd, &events[i]) < 0)
 			{

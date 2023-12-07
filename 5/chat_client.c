@@ -199,7 +199,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 			}
 			else if (bytes_read == 0)
 			{
-				printf("Server closed the connection\n");
+				// printf("Server closed the connection\n");
 				close(client->socket);
 				// return 0;
 				break;
@@ -253,7 +253,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 				close(client->socket);
 				return 0;
 			}
-			printf("Bytes sending: %ld\n", bytes_sent);
+			// printf("Bytes sending: %ld\n", bytes_sent);
 			total_bytes_sent += bytes_sent;
 		}
 		client->fd.events = POLLIN;
@@ -303,7 +303,7 @@ char *trimwhitespace(char *str, int size)
 		size--;
 
 	str = realloc(str, size + 2);
-	printf("trim: %d\n", size);
+	// printf("trim: %d\n", size);
 	str[size + 1] = '\0';
 
 	return str;
@@ -332,7 +332,7 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 		if (msg[i] == '\n')
 		{
 			client->last_message[size] = '\0';
-			printf("size before trim: %d\n", size);
+			// printf("size before trim: %d\n", size);
 			client->last_message = trimwhitespace(client->last_message, size);
 			client->last_message[strlen(client->last_message) - 1] = '\n';
 			client->sent_buffer = realloc(client->sent_buffer, client->size + size);
