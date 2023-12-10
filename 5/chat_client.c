@@ -10,21 +10,23 @@
 #include <sys/epoll.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <fcntl.h>
+
 #define _GNU_SOURCE
 
-#define MAX_EVENTS 1024
 struct chat_client
 {
 	/** Socket connected to the server. */
 	int socket;
 	/** Array of received messages. */
-	struct chat_message recieved_msgs[1024];
+	struct chat_message *recieved_msgs;
 	/* ... */
 	/** Output buffer. */
 	char *sent_buffer;
 	char *last_message;
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
+	int received_capacity;
 	int sending;
 	int sent;
 	int recieved;
@@ -45,6 +47,8 @@ chat_client_new(const char *name)
 	/* IMPLEMENT THIS FUNCTION */
 	client->recieved = client->sending = client->sent = client->size = client->cursor = 0;
 	client->sent_buffer = client->last_message = NULL;
+	client->received_capacity = 2048;
+	client->recieved_msgs = malloc(sizeof(struct chat_message) * 2048);
 
 	return client;
 }
@@ -58,12 +62,19 @@ void chat_client_delete(struct chat_client *client)
 	for (int i = 0; i < client->recieved; i++)
 	{
 		free(client->recieved_msgs[i].data);
+		// free(client->recieved_msgs[i]);
 	}
+	free(client->recieved_msgs);
 	free(client->last_message);
 	free(client->sent_buffer);
 	free(client);
 }
-
+// reference: Lecture 9
+void make_fd_nonblocking(int fd)
+{
+	int old_flags = fcntl(fd, F_GETFL);
+	fcntl(fd, F_SETFL, old_flags | O_NONBLOCK);
+}
 int chat_client_connect(struct chat_client *client, const char *addr)
 {
 	/*
@@ -122,7 +133,7 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 		perror("Failed to connect");
 		return CHAT_ERR_SYS;
 	}
-
+	make_fd_nonblocking(client->socket);
 	client->fd.fd = client->socket;
 	client->fd.events = POLLIN;
 	return 0;
@@ -131,7 +142,7 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 struct chat_message *
 chat_client_pop_next(struct chat_client *client)
 {
-	if(client->recieved == 0)
+	if (client->recieved == 0)
 	{
 		return NULL;
 	}
@@ -139,13 +150,13 @@ chat_client_pop_next(struct chat_client *client)
 	struct chat_message *msg = malloc(sizeof(struct chat_message));
 	msg->data = strdup(client->recieved_msgs[0].data);
 	msg->size = client->recieved_msgs[0].size;
-	for(int j = 1; j < client->recieved; j++)
+	for (int j = 1; j < client->recieved; j++)
 	{
 		client->recieved_msgs[j - 1] = client->recieved_msgs[j];
-	} 
-	free(client->recieved_msgs[client->recieved - 1].data);
+	}
+	// free(client->recieved_msgs[client->recieved - 1].data);
 	client->recieved--;
-	
+
 	return msg;
 }
 
@@ -165,13 +176,9 @@ int chat_client_update(struct chat_client *client, double timeout)
 		return CHAT_ERR_NOT_STARTED;
 	}
 
-	if (client->sending - client->sent > 0)
-	{
-		client->fd.events |= POLLOUT;
-	}
-	client->fd.revents = 0;
 	int ret = poll(&client->fd, 1, timeout * 1000);
-	if (ret == -1)
+	// printf("ret: %d, pollin: %d, pollout:%d\n", client->fd.revents, POLLIN, POLLOUT);
+	if (ret <= -1)
 	{
 		perror("poll");
 
@@ -184,57 +191,65 @@ int chat_client_update(struct chat_client *client, double timeout)
 
 	if (client->fd.revents & POLLIN)
 	{
-		// MightTODO: dynamic allocation
+		// printf("Incoming Client: %d\n", client->socket);
+
 		char *buffer = malloc(2048 * sizeof(char));
-		int total_bytes_read = 0;
+		int total_bytes_read = 0, capacity = 2048;
 		while (true)
 		{
-			int bytes_read = recv(client->socket, buffer + total_bytes_read, sizeof(buffer) - total_bytes_read, MSG_DONTWAIT);
+			int bytes_read = recv(client->socket, buffer + total_bytes_read, capacity - total_bytes_read, MSG_DONTWAIT);
 
-			if (bytes_read == -1)
+			if (bytes_read <= -1)
 			{
-				perror("recv");
-				// return CHAT_ERR_SYS;
+				// perror("recv");
 				break;
 			}
 			else if (bytes_read == 0)
 			{
-				// printf("Server closed the connection\n");
-				close(client->socket);
-				// return 0;
+				// close(client->socket);
 				break;
 			}
 			else
 			{
 				total_bytes_read += bytes_read;
-				if(total_bytes_read == sizeof(buffer))
+				if (total_bytes_read == capacity)
 				{
-					buffer = realloc(buffer, sizeof(buffer) * 2);
+					capacity *= 2;
+					buffer = realloc(buffer, capacity);
 				}
 			}
 		}
+		// printf("%d %s\n", total_bytes_read, buffer);
 		int start = 0;
-		for(int idx = 0; idx < total_bytes_read; idx++)
+		for (int idx = 0; idx < total_bytes_read; idx++)
 		{
-			if(buffer[idx] == '\n' || idx == total_bytes_read - 1)
+			if (buffer[idx] == '\0' && start == idx)
 			{
-				int size = idx - start - 1;
+				start++;
+			}
+			if (buffer[idx] == '\n')
+			{
+				int size = idx - start;
+				// printf("recieved no. of messages: %d\n", client->recieved);
 				client->recieved_msgs[client->recieved].data = calloc(size, sizeof(char));
 				memcpy(client->recieved_msgs[client->recieved].data, buffer + start, size);
 				client->recieved_msgs[client->recieved].size = size;
 				client->recieved++;
+				if(client->recieved == client->received_capacity)
+				{
+					client->received_capacity *= 2;
+					client->recieved_msgs = realloc(client->recieved_msgs, sizeof(struct chat_message) * client->received_capacity);
+				}
 				start = idx + 1;
-				free(client->last_message);
-				client->last_message = NULL;
+				
 			}
 		}
 		free(buffer);
 	}
 
-	if (client->fd.revents & POLLOUT)
+	else if (client->fd.revents & POLLOUT)
 	{
 		// printf("Outgoing\n");
-		// client->sent_buffer[strlen(client->sent_buffer) - 1] = '\0';
 		client->sent_buffer = realloc(client->sent_buffer, client->size + 1);
 		client->sent_buffer[client->size] = '\0';
 		client->size++;
@@ -242,26 +257,34 @@ int chat_client_update(struct chat_client *client, double timeout)
 		while ((int)total_bytes_sent < client->size)
 		{
 			int bytes_sent = send(client->socket, client->sent_buffer + total_bytes_sent, client->size - total_bytes_sent, 0);
-			if (bytes_sent == -1)
+			if (bytes_sent <= -1)
 			{
-				perror("send");
-
-				return CHAT_ERR_SYS;
+				// perror("send");
+				break;
 			}
 			if (bytes_sent == 0)
 			{
-				close(client->socket);
-				return 0;
+				break;
 			}
-			// printf("Bytes sending: %ld\n", bytes_sent);
 			total_bytes_sent += bytes_sent;
+		}
+		if(total_bytes_sent == 0)
+		{
+			return CHAT_ERR_SYS;
 		}
 		client->fd.events = POLLIN;
 		client->size = 0;
 		free(client->sent_buffer);
 		client->sent_buffer = NULL;
-
 	}
+	// else
+	// {
+	// 	if (client->fd.revents & POLLNVAL)
+	// 	{
+	// 		printf("HERE\n");
+	// 	}
+	// 	return CHAT_ERR_SYS;
+	// }
 	return 0;
 }
 
@@ -277,7 +300,7 @@ int chat_client_get_events(const struct chat_client *client)
 	 * buffer.
 	 */
 
-	if (client->sending != 0)
+	if (client->fd.events & POLLOUT)
 	{
 		return CHAT_EVENT_OUTPUT | CHAT_EVENT_INPUT;
 	}
