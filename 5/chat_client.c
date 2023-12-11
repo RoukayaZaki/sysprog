@@ -222,12 +222,12 @@ int chat_client_update(struct chat_client *client, double timeout)
 			{
 				int size = idx - start;
 				struct chat_message* msg = malloc(sizeof(struct chat_message));
-				msg->data = calloc(size, sizeof(char));
+				msg->data = calloc(size + 1, sizeof(char));
 				memcpy(msg->data, buffer + start, size);
+				msg->data[size] = '\0';
 				msg->size = size;
 				client->recieved_msgs[client->recieved] = msg;
 				client->recieved++;
-
 				if(client->recieved == client->received_capacity)
 				{
 					client->received_capacity *= 2;

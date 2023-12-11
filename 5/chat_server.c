@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <errno.h>
 #define _GNU_SOURCE
 
 #define MAX_EVENTS 1025
@@ -59,10 +60,14 @@ void chat_server_delete(struct chat_server *server)
 
 	for (int i = 0; i < server->recieved; i++)
 	{
-		free(server->to_be_sent[server->recieved]->data);
-		free(server->to_be_sent[server->recieved]);
+		free(server->to_be_sent[i]->data);
+		free(server->to_be_sent[i]);
 	}
 	free(server->to_be_sent);
+	for(int i = 0; i < server->peers_size; i++)
+	{
+		free(server->peers[i].outbox);
+	}
 	free(server);
 }
 
@@ -130,12 +135,12 @@ chat_server_pop_next(struct chat_server *server)
 	}
 
 	struct chat_message *msg = server->to_be_sent[0];
-	
+
 	for (int j = 1; j < server->recieved; j++)
 	{
 		server->to_be_sent[j - 1] = server->to_be_sent[j];
 	}
-	
+
 	server->recieved--;
 
 	return msg;
@@ -162,7 +167,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 	int nfds = epoll_wait(server->epollfd, events, MAX_EVENTS, timeout * 1000.0);
 	if (nfds == -1)
 	{
-		
+
 		return CHAT_ERR_SYS;
 	}
 	if (nfds == 0)
@@ -173,26 +178,42 @@ int chat_server_update(struct chat_server *server, double timeout)
 	{
 		if (events[i].data.fd == server->socket)
 		{
-			struct sockaddr_in address;
-			socklen_t length = sizeof(address);
-			int new_client_fd = accept(server->socket, NULL, NULL);
-			if (new_client_fd == -1)
+			//reference: https://mecha-mind.medium.com/a-non-threaded-chat-server-in-c-53dadab8e8f3
+			while (true)
 			{
-				
-				return CHAT_ERR_SYS;
-			}
-			server_make_fd_nonblocking(new_client_fd);
-			server->event.events = EPOLLIN | EPOLLET;
-			server->event.data.fd = new_client_fd;
-			if (epoll_ctl(server->epollfd, EPOLL_CTL_ADD, new_client_fd, &server->event) == -1)
-			{
-				perror("epoll_ctl: new_client_fd");
-				return CHAT_ERR_SYS;
-			}
+				struct sockaddr_in address;
+				socklen_t length = sizeof(address);
+				int new_client_fd = accept(server->socket, NULL, NULL);
+				if (new_client_fd == -1)
+				{
+					if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+					{
+						break;
+					}
+					else
+					{
+						perror("accept");
+						break;
+					}
+				}
+				if (new_client_fd == -1)
+				{
 
-			server->peers[server->peers_size].socket = new_client_fd;
-			server->peers[server->peers_size].outbox_size = 0;
-			server->peers_size++;
+					return CHAT_ERR_SYS;
+				}
+				server_make_fd_nonblocking(new_client_fd);
+				server->event.events = EPOLLIN | EPOLLET;
+				server->event.data.fd = new_client_fd;
+				if (epoll_ctl(server->epollfd, EPOLL_CTL_ADD, new_client_fd, &server->event) == -1)
+				{
+					perror("epoll_ctl: new_client_fd");
+					return CHAT_ERR_SYS;
+				}
+
+				server->peers[server->peers_size].socket = new_client_fd;
+				server->peers[server->peers_size].outbox_size = 0;
+				server->peers_size++;
+			}
 		}
 
 		if (events[i].events & EPOLLIN && events[i].data.fd != server->socket)
@@ -235,7 +256,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 			int start = 0;
 			for (int idx = 0; idx < total_bytes_read; idx++)
 			{
-				if(buffer[idx] == '\0' && start == idx)
+				if (buffer[idx] == '\0' && start == idx)
 				{
 					start++;
 				}
@@ -245,10 +266,11 @@ int chat_server_update(struct chat_server *server, double timeout)
 					struct chat_message *msg = malloc(sizeof(struct chat_message));
 					msg->data = calloc(size + 1, sizeof(char));
 					memcpy(msg->data, buffer + start, size);
+					msg->data[size] = '\0';
 					msg->size = size;
 					server->to_be_sent[server->recieved] = msg;
 					server->recieved++;
-					if(server->recieved >= server->capacity)
+					if (server->recieved >= server->capacity)
 					{
 						server->capacity *= 2;
 						server->to_be_sent = realloc(server->to_be_sent, sizeof(struct chat_message *) * server->capacity);
@@ -291,7 +313,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 				}
 
 				int total_bytes_sent = 0;
-				
+
 				while ((int)total_bytes_sent < server->peers[idx].outbox_size)
 				{
 					int bytes_sent = send(server->peers[idx].socket, server->peers[idx].outbox + total_bytes_sent, server->peers[idx].outbox_size - total_bytes_sent, 0);
@@ -305,12 +327,12 @@ int chat_server_update(struct chat_server *server, double timeout)
 					}
 					total_bytes_sent += bytes_sent;
 				}
-					free(server->peers[idx].outbox);
-					server->peers[idx].outbox = NULL;
-					server->peers[idx].outbox_size = 0;
+				free(server->peers[idx].outbox);
+				server->peers[idx].outbox = NULL;
+				server->peers[idx].outbox_size = 0;
 			}
 			events[i].events &= ~EPOLLOUT;
-			if(epoll_ctl(server->epollfd, EPOLL_CTL_MOD, events[i].data.fd, &events[i]) < 0)
+			if (epoll_ctl(server->epollfd, EPOLL_CTL_MOD, events[i].data.fd, &events[i]) < 0)
 			{
 				return CHAT_ERR_SYS;
 			}
