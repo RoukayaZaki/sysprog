@@ -321,7 +321,7 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 		return CHAT_ERR_NOT_STARTED;
 	}
 
-	int size = 0, start = 0;
+	int size = 0;
 	if (client->last_message == NULL)
 		client->last_message = calloc(msg_size + 1, sizeof(char));
 	else
@@ -329,6 +329,7 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 		size = client->cursor;
 		client->last_message = realloc(client->last_message, (int)size + msg_size + 1);
 	}
+	// int start = 0;
 	for (int i = 0; i < (int)msg_size; i++)
 	{
 		client->last_message[size] = msg[i];
@@ -345,7 +346,7 @@ int chat_client_feed(struct chat_client *client, const char *msg, uint32_t msg_s
 			client->size += size;
 			size = 0;
 			client->cursor = 0;
-			start = i + 1;
+			// start = i + 1;
 			client->fd.events |= POLLOUT;
 		}
 	}

@@ -181,8 +181,8 @@ int chat_server_update(struct chat_server *server, double timeout)
 			//reference: https://mecha-mind.medium.com/a-non-threaded-chat-server-in-c-53dadab8e8f3
 			while (true)
 			{
-				struct sockaddr_in address;
-				socklen_t length = sizeof(address);
+				// struct sockaddr_in address;
+				// socklen_t length = sizeof(address);
 				int new_client_fd = accept(server->socket, NULL, NULL);
 				if (new_client_fd == -1)
 				{
