@@ -21,7 +21,6 @@ struct chat_peer
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
 	int outbox_size;
-	int sent;
 };
 
 struct chat_server
@@ -32,9 +31,8 @@ struct chat_server
 	struct chat_peer peers[1024];
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
-	struct chat_message *to_be_sent;
+	struct chat_message **to_be_sent;
 	int capacity;
-	int sent;
 	int recieved;
 	int peers_size;
 	int epollfd;
@@ -48,10 +46,9 @@ chat_server_new(void)
 	server->socket = -1;
 
 	server->peers_size = 0;
-	server->sent = 0;
 	server->recieved = 0;
 	server->capacity = 2048;
-	server->to_be_sent = malloc(sizeof(struct chat_message) * server->capacity);
+	server->to_be_sent = malloc(sizeof(struct chat_message *) * server->capacity);
 	return server;
 }
 
@@ -62,8 +59,10 @@ void chat_server_delete(struct chat_server *server)
 
 	for (int i = 0; i < server->recieved; i++)
 	{
-		free(server->to_be_sent[server->recieved].data);
+		free(server->to_be_sent[server->recieved]->data);
+		free(server->to_be_sent[server->recieved]);
 	}
+	free(server->to_be_sent);
 	free(server);
 }
 
@@ -87,7 +86,6 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
 	 * 3) Listen the server socket (function listen()).
 	 * 4) Create epoll/kqueue if needed.
 	 */
-	/* IMPLEMENT THIS FUNCTION */
 	if (server->socket != -1)
 	{
 		return CHAT_ERR_ALREADY_STARTED;
@@ -131,16 +129,13 @@ chat_server_pop_next(struct chat_server *server)
 		return NULL;
 	}
 
-	struct chat_message *msg = malloc(sizeof(struct chat_message));
-	msg->data = strdup(server->to_be_sent[0].data);
-	msg->size = server->to_be_sent[0].size;
-	free(server->to_be_sent[0].data);
+	struct chat_message *msg = server->to_be_sent[0];
+	
 	for (int j = 1; j < server->recieved; j++)
 	{
 		server->to_be_sent[j - 1] = server->to_be_sent[j];
 	}
-	// free(server->to_be_sent[server->recieved].data);
-	// server->to_be_sent[]
+	
 	server->recieved--;
 
 	return msg;
@@ -180,7 +175,6 @@ int chat_server_update(struct chat_server *server, double timeout)
 		{
 			struct sockaddr_in address;
 			socklen_t length = sizeof(address);
-			// int new_client_fd = accept(server->socket, (struct sockaddr *)&address, &length);
 			int new_client_fd = accept(server->socket, NULL, NULL);
 			if (new_client_fd == -1)
 			{
@@ -193,24 +187,16 @@ int chat_server_update(struct chat_server *server, double timeout)
 			if (epoll_ctl(server->epollfd, EPOLL_CTL_ADD, new_client_fd, &server->event) == -1)
 			{
 				perror("epoll_ctl: new_client_fd");
-				// todo: handle client addition failure, delete close free
-				printf("yea adding client failed\n");
 				return CHAT_ERR_SYS;
 			}
 
 			server->peers[server->peers_size].socket = new_client_fd;
 			server->peers[server->peers_size].outbox_size = 0;
-			server->peers[server->peers_size].sent = 0;
 			server->peers_size++;
-			// printf("I got new client #%d\n", server->peers_size);
 		}
 
-		// TODO: handle the coming message
-		// do_use_fd(events[i].data.fd);
 		if (events[i].events & EPOLLIN && events[i].data.fd != server->socket)
 		{
-			// printf("Incoming server\n");
-
 			char *buffer = calloc(2048, sizeof(char));
 			int total_bytes_read = 0, capacity = 2048;
 			while (true)
@@ -226,8 +212,6 @@ int chat_server_update(struct chat_server *server, double timeout)
 					buffer = realloc(buffer, capacity);
 				}
 			}
-			// printf("Bytes recieved: %ld, buffer: %s\n\n\n", total_bytes_read, buffer);
-			// Connection closed, delete peer
 			if (total_bytes_read == 0)
 			{
 				bool closed = false;
@@ -247,48 +231,39 @@ int chat_server_update(struct chat_server *server, double timeout)
 					}
 				}
 				server->peers_size--;
-				// break;
 			}
-
-			// server->to_be_sent[server->recieved].data = realloc(server->to_be_sent[server->recieved].data, bytes_read);
 			int start = 0;
 			for (int idx = 0; idx < total_bytes_read; idx++)
 			{
-				// printf("Char: %c\n", buffer[idx]);
 				if(buffer[idx] == '\0' && start == idx)
 				{
-					// printf("\n\n\n----------Warning------------\n\n\n");
 					start++;
 				}
 				if (buffer[idx] == '\n')
 				{
 					int size = idx - start;
-					// printf("Let's put message in server of size: %d with starting char: %c\n", size, buffer[start]);
-					server->to_be_sent[server->recieved].data = calloc(size + 1, sizeof(char));
-					memcpy(server->to_be_sent[server->recieved].data, buffer + start, size);
-					server->to_be_sent[server->recieved].size = size;
-					server->to_be_sent[server->recieved].data[size] = '\0';
-					// printf("Server Message: %s\n\n\n", server->to_be_sent[server->recieved]);
+					struct chat_message *msg = malloc(sizeof(struct chat_message));
+					msg->data = calloc(size + 1, sizeof(char));
+					memcpy(msg->data, buffer + start, size);
+					msg->size = size;
+					server->to_be_sent[server->recieved] = msg;
 					server->recieved++;
 					if(server->recieved >= server->capacity)
 					{
 						server->capacity *= 2;
-						server->to_be_sent = realloc(server->to_be_sent, sizeof(struct chat_message) * server->capacity);
+						server->to_be_sent = realloc(server->to_be_sent, sizeof(struct chat_message *) * server->capacity);
 					}
 					start = idx + 1;
 				}
 			}
-			// printf("Message recieved: %s\n", server->to_be_sent[server->recieved-1].data);
 			for (int j = 0; j < server->peers_size; j++)
 			{
-				// printf("Client #%d\n", j);
 				if (events[i].data.fd == server->peers[j].socket)
 					continue;
 
 				struct epoll_event new_event;
 				new_event.data.fd = server->peers[j].socket;
 				new_event.events = EPOLLIN | EPOLLET | EPOLLOUT;
-				// printf("sending to client: %d\n", j);
 				if (epoll_ctl(server->epollfd, EPOLL_CTL_MOD, server->peers[j].socket, &new_event) < 0)
 				{
 					perror("Modify");
@@ -298,16 +273,11 @@ int chat_server_update(struct chat_server *server, double timeout)
 				server->peers[j].outbox = realloc(server->peers[j].outbox, server->peers[j].outbox_size + total_bytes_read + 1);
 				memcpy(server->peers[j].outbox + server->peers[j].outbox_size, buffer, total_bytes_read);
 				server->peers[j].outbox_size += total_bytes_read;
-				// if(server->peers[j].outbox[(server->peers[j].outbox_size - 1)] == '\0')
-				// 	printf("%s\n", server->peers[j].outbox);
 			}
 			free(buffer);
-			// printf("Server recieved: %d messages\n", server->recieved);
 		}
 		if (events[i].events & EPOLLOUT)
 		{
-			// printf("Outgoing Server\n");
-			
 			bool closed = false;
 			for (int idx = 0; idx < server->peers_size; idx++)
 			{
@@ -324,34 +294,17 @@ int chat_server_update(struct chat_server *server, double timeout)
 				
 				while ((int)total_bytes_sent < server->peers[idx].outbox_size)
 				{
-					// printf("going: %s\n", server->peers[idx].outbox);
 					int bytes_sent = send(server->peers[idx].socket, server->peers[idx].outbox + total_bytes_sent, server->peers[idx].outbox_size - total_bytes_sent, 0);
 					if (bytes_sent <= -1)
 					{
-						perror("send");
 						break;
-						// return CHAT_ERR_SYS;
 					}
 					if (bytes_sent == 0)
 					{
-						// close(client->socket);
-						// return 0;
 						break;
 					}
-					// printf("Bytes sending: %ld Message: %s\n", bytes_sent, client->sent_msgs[client->sent].data);
 					total_bytes_sent += bytes_sent;
 				}
-				// printf("Bytes Sent: %ld, Message sent: %s\n", total_bytes_sent, server->peers[idx].outbox);
-				// if (total_bytes_sent < server->peers[idx].outbox_size)
-				// {
-				// 	free(server->peers[idx].outbox);
-				// 	close(server->peers[idx].socket);
-				// 	closed = true;
-				// 	epoll_ctl(server->epollfd, EPOLL_CTL_DEL, events[i].data.fd, &events[i]);
-				// }
-				// else
-				// {
-				// }
 					free(server->peers[idx].outbox);
 					server->peers[idx].outbox = NULL;
 					server->peers[idx].outbox_size = 0;
@@ -386,8 +339,7 @@ int chat_server_get_descriptor(const struct chat_server *server)
 	 * sockets.
 	 */
 #endif
-	(void)server;
-	return -1;
+	return server->epollfd;
 }
 
 int chat_server_get_socket(const struct chat_server *server)
