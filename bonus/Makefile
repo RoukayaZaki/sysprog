@@ -1,4 +1,4 @@
-all: task5
+all: task3
 
 task1:
 	gcc task1.c -o task1
@@ -14,3 +14,8 @@ task5:
 	gcc task5.c -o task5
 	./task5
 	rm task5
+
+task3:
+	gcc task3.c -o task3
+	./task3
+	rm task3

@@ -7,27 +7,29 @@
 
 #define REPEAT_COUNT 5
 
-#define NUM_THREADS 3
-#define MAX_VALUE 100000000
+#define MAX_VALUE 10000000
 
-atomic_uint counter = 0;
+int counter = 0;
+pthread_mutex_t lock; 
 
 void *increment_function(void *order) {
     while(counter < MAX_VALUE)
     {
-        atomic_fetch_add_explicit(&counter, 1, (memory_order)order);
+        pthread_mutex_lock(&lock); 
+        counter++;
+        pthread_mutex_unlock(&lock); 
     }
     return NULL;
 }
 
-double bench_threads(int num_threads, memory_order order)
+double bench_threads(int num_threads)
 {
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
     pthread_t tid[num_threads];
     for (int i = 0; i < num_threads; i++)
     {
-        pthread_create(&tid[i], NULL, increment_function, (void*)order);
+        pthread_create(&tid[i], NULL, increment_function, NULL);
     }
     for (int i = 0; i < num_threads; i++)
     {
@@ -35,7 +37,7 @@ double bench_threads(int num_threads, memory_order order)
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     long sec_diff = end.tv_sec - start.tv_sec;
-    return (sec_diff * 1e9 + end.tv_nsec - start.tv_nsec);
+    return (sec_diff * 1e9 + end.tv_nsec - start.tv_nsec) / MAX_VALUE;
 }
 int less_than(const void *a, const void *b)
 {
@@ -43,40 +45,41 @@ int less_than(const void *a, const void *b)
 }
 int main()
 {
-    printf("Benchmarking Atomic increment\n");
+    printf("Benchmarking Pthread mutex lock\n");
     int num_threads;
     scanf("%d", &num_threads);
-    printf("100 mln increments with %d threads and relaxed order\n", num_threads);
+    printf("10 mln locks with %d threads\n", num_threads);
     double benching_results[REPEAT_COUNT];
     for(int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
-        benching_results[i] = bench_threads(num_threads, memory_order_relaxed);
+        benching_results[i] = bench_threads(num_threads);
     }
     qsort(benching_results, REPEAT_COUNT, sizeof(double), less_than);
     printf("\tMin: %.2f ns; Max: %.2f ns; Median: %.2f ns\n", benching_results[0], benching_results[REPEAT_COUNT - 1], benching_results[REPEAT_COUNT / 2]);
     printf("\n");
 
     scanf("%d", &num_threads);
-    printf("100 mln increments with %d threads and relaxed order\n", num_threads);
+    printf("10 mln locks with %d threads\n", num_threads);
     for(int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
-        benching_results[i] = bench_threads(num_threads, memory_order_relaxed);
+        benching_results[i] = bench_threads(num_threads);
     }
     qsort(benching_results, REPEAT_COUNT, sizeof(double), less_than);
     printf("\tMin: %.2f ns; Max: %.2f ns; Median: %.2f ns\n", benching_results[0], benching_results[REPEAT_COUNT - 1], benching_results[REPEAT_COUNT / 2]);
     printf("\n");
 
-    counter = 0;
     scanf("%d", &num_threads);
-    printf("100 mln increments with %d threads and sequentially consistent order\n", num_threads);
+    printf("10 mln locks with %d threads\n", num_threads);
     for(int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
-        benching_results[i] = bench_threads(num_threads, memory_order_seq_cst);
+        benching_results[i] = bench_threads(num_threads);
     }
     qsort(benching_results, REPEAT_COUNT, sizeof(double), less_than);
     printf("\tMin: %.2f ns; Max: %.2f ns; Median: %.2f ns\n", benching_results[0], benching_results[REPEAT_COUNT - 1], benching_results[REPEAT_COUNT / 2]);
     printf("\n");
+    pthread_mutex_destroy(&lock); 
+
 }
