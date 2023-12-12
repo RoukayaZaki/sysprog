@@ -37,6 +37,8 @@ struct chat_server
 	int recieved;
 	int peers_size;
 	int epollfd;
+	char *last_message;
+	int cursor;
 	struct epoll_event event;
 };
 
@@ -49,6 +51,8 @@ chat_server_new(void)
 	server->peers_size = 0;
 	server->recieved = 0;
 	server->capacity = 2048;
+	server->cursor = 0;
+	server->last_message = NULL;
 	server->to_be_sent = malloc(sizeof(struct chat_message *) * server->capacity);
 	return server;
 }
@@ -64,7 +68,7 @@ void chat_server_delete(struct chat_server *server)
 		free(server->to_be_sent[i]);
 	}
 	free(server->to_be_sent);
-	for(int i = 0; i < server->peers_size; i++)
+	for (int i = 0; i < server->peers_size; i++)
 	{
 		free(server->peers[i].outbox);
 	}
@@ -178,7 +182,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 	{
 		if (events[i].data.fd == server->socket)
 		{
-			//reference: https://mecha-mind.medium.com/a-non-threaded-chat-server-in-c-53dadab8e8f3
+			// reference: https://mecha-mind.medium.com/a-non-threaded-chat-server-in-c-53dadab8e8f3
 			while (true)
 			{
 				// struct sockaddr_in address;
@@ -319,6 +323,21 @@ int chat_server_update(struct chat_server *server, double timeout)
 					int bytes_sent = send(server->peers[idx].socket, server->peers[idx].outbox + total_bytes_sent, server->peers[idx].outbox_size - total_bytes_sent, 0);
 					if (bytes_sent <= -1)
 					{
+						if (errno == EWOULDBLOCK || errno == EAGAIN)
+						{
+
+							int rest = server->peers[idx].outbox_size - total_bytes_sent;
+							if (rest <= 0)
+							{
+								break;
+							}
+							// if (server->peers[idx].outbox[server->peers[idx].outbox_size - 1] == '\0')
+							// {
+							// 	rest--;
+							// }
+							memmove(server->peers[idx].outbox, server->peers[idx].outbox + total_bytes_sent, rest);
+							server->peers[idx].outbox_size = rest;
+						}
 						break;
 					}
 					if (bytes_sent == 0)

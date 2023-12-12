@@ -11,6 +11,7 @@
 #include <poll.h>
 #include <stdbool.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define _GNU_SOURCE
 
@@ -27,8 +28,6 @@ struct chat_client
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
 	int received_capacity;
-	int sending;
-	int sent;
 	int recieved;
 	int size;
 	int cursor;
@@ -44,8 +43,7 @@ chat_client_new(const char *name)
 	struct chat_client *client = calloc(1, sizeof(*client));
 	client->socket = -1;
 
-	/* IMPLEMENT THIS FUNCTION */
-	client->recieved = client->sending = client->sent = client->size = client->cursor = 0;
+	client->recieved = client->size = client->cursor = 0;
 	client->sent_buffer = client->last_message = NULL;
 	client->received_capacity = 2048;
 	client->recieved_msgs = malloc(sizeof(struct chat_message *) * 2048);
@@ -193,11 +191,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 		{
 			int bytes_read = recv(client->socket, buffer + total_bytes_read, capacity - total_bytes_read, MSG_DONTWAIT);
 
-			if (bytes_read <= -1)
-			{
-				break;
-			}
-			else if (bytes_read == 0)
+			if (bytes_read <= 0)
 			{
 				break;
 			}
@@ -249,12 +243,26 @@ int chat_client_update(struct chat_client *client, double timeout)
 		while ((int)total_bytes_sent < client->size)
 		{
 			int bytes_sent = send(client->socket, client->sent_buffer + total_bytes_sent, client->size - total_bytes_sent, 0);
-			if (bytes_sent <= -1)
+			if (bytes_sent < 0)
 			{
-				break;
+				if(errno == EWOULDBLOCK || errno == EAGAIN)
+				{
+					int rest = client->size - total_bytes_sent;
+					if(rest <= 0) break;
+					if(client->sent_buffer[client->size - 1] == '\0')
+					{
+						rest--;
+					}
+					memmove(client->sent_buffer, client->sent_buffer + total_bytes_sent, rest);
+					client->size = rest;
+				}
+				return 0;
 			}
-			if (bytes_sent == 0)
+			if(bytes_sent == 0)
 			{
+				close(client->socket);
+				client->socket = -1;
+				// return 0;
 				break;
 			}
 			total_bytes_sent += bytes_sent;
