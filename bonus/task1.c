@@ -8,11 +8,11 @@
 
 double bench_clock(clockid_t clock_type)
 {
-    struct timespec start, end;
+    struct timespec start, end, call;
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (int i = 0; i < NUM_CALLS; i++)
     {
-        clock_gettime(clock_type, NULL);
+        clock_gettime(clock_type, &call);
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     long sec_diff = end.tv_sec - start.tv_sec;
