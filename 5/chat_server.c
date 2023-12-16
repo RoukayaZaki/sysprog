@@ -33,6 +33,9 @@ struct chat_server
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
 	struct chat_message **to_be_sent;
+	char *buffer;
+	int buff_size;
+	int buff_capacity;
 	int capacity;
 	int recieved;
 	int peers_size;
@@ -50,10 +53,11 @@ chat_server_new(void)
 
 	server->peers_size = 0;
 	server->recieved = 0;
-	server->capacity = 2048;
-	server->cursor = 0;
+	server->capacity = server->buff_capacity = 2048;
+	server->cursor = server->buff_size = 0;
 	server->last_message = NULL;
 	server->to_be_sent = malloc(sizeof(struct chat_message *) * server->capacity);
+	server->buffer = malloc(2048 * sizeof(char));
 	return server;
 }
 
@@ -72,6 +76,7 @@ void chat_server_delete(struct chat_server *server)
 	{
 		free(server->peers[i].outbox);
 	}
+	free(server->buffer);
 	free(server);
 }
 
@@ -222,19 +227,19 @@ int chat_server_update(struct chat_server *server, double timeout)
 
 		if (events[i].events & EPOLLIN && events[i].data.fd != server->socket)
 		{
-			char *buffer = calloc(2048, sizeof(char));
-			int total_bytes_read = 0, capacity = 2048;
+			int total_bytes_read = 0;
 			while (true)
 			{
-				int bytes_read = recv(events[i].data.fd, buffer + total_bytes_read, capacity - total_bytes_read, MSG_DONTWAIT);
+				int bytes_read = recv(events[i].data.fd, server->buffer + server->buff_size, server->buff_capacity - server->buff_size, MSG_DONTWAIT);
 
 				if (bytes_read <= 0)
 					break;
 				total_bytes_read += bytes_read;
-				if (total_bytes_read + 1 >= capacity)
+				server->buff_size += bytes_read;
+				if (server->buff_size + 1 >= server->buff_capacity)
 				{
-					capacity *= 2;
-					buffer = realloc(buffer, capacity);
+					server->buff_capacity *= 2;
+					server->buffer = realloc(server->buffer, server->buff_capacity);
 				}
 			}
 			if (total_bytes_read == 0)
@@ -260,16 +265,16 @@ int chat_server_update(struct chat_server *server, double timeout)
 			int start = 0;
 			for (int idx = 0; idx < total_bytes_read; idx++)
 			{
-				if (buffer[idx] == '\0' && start == idx)
+				if (server->buffer[idx] == '\0' && start == idx)
 				{
 					start++;
 				}
-				if (buffer[idx] == '\n')
+				if (server->buffer[idx] == '\n')
 				{
 					int size = idx - start;
 					struct chat_message *msg = malloc(sizeof(struct chat_message));
 					msg->data = calloc(size + 1, sizeof(char));
-					memcpy(msg->data, buffer + start, size);
+					memcpy(msg->data, server->buffer + start, size);
 					msg->data[size] = '\0';
 					msg->size = size;
 					server->to_be_sent[server->recieved] = msg;
@@ -293,14 +298,26 @@ int chat_server_update(struct chat_server *server, double timeout)
 				if (epoll_ctl(server->epollfd, EPOLL_CTL_MOD, server->peers[j].socket, &new_event) < 0)
 				{
 					perror("Modify");
-					free(buffer);
+					// free(buffer);
 					return CHAT_ERR_SYS;
 				}
 				server->peers[j].outbox = realloc(server->peers[j].outbox, server->peers[j].outbox_size + total_bytes_read + 1);
-				memcpy(server->peers[j].outbox + server->peers[j].outbox_size, buffer, total_bytes_read);
+				memcpy(server->peers[j].outbox + server->peers[j].outbox_size, server->buffer, total_bytes_read);
 				server->peers[j].outbox_size += total_bytes_read;
 			}
-			free(buffer);
+			if (start == server->buff_size)
+			{
+				free(server->buffer);
+				server->buffer = malloc(2048 * sizeof(char));
+				server->buff_capacity = 2048;
+				server->buff_size = 0;
+			}
+			else
+			{
+				int rest = server->buff_size - start;
+				memmove(server->buffer, server->buffer + start, rest);
+				server->buff_size -= start;
+			}
 		}
 		if (events[i].events & EPOLLOUT)
 		{
