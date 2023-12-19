@@ -33,9 +33,9 @@ struct chat_server
 	/* ... */
 	/* PUT HERE OTHER MEMBERS */
 	struct chat_message **to_be_sent;
-	char *buffer;
-	int buff_size;
-	int buff_capacity;
+	char *buffer[1024];
+	int buff_size[1024];
+	int buff_capacity[1024];
 	int capacity;
 	int recieved;
 	int peers_size;
@@ -53,11 +53,16 @@ chat_server_new(void)
 
 	server->peers_size = 0;
 	server->recieved = 0;
-	server->capacity = server->buff_capacity = 2048;
-	server->cursor = server->buff_size = 0;
+	server->capacity = 2048;
+	server->cursor = 0;
 	server->last_message = NULL;
 	server->to_be_sent = malloc(sizeof(struct chat_message *) * server->capacity);
-	server->buffer = malloc(2048 * sizeof(char));
+	for(int i = 0; i < 1024; i++)
+	{
+		server->buff_capacity[i] = 2048;
+		server->buff_size[i] = 0;
+		server->buffer[i] = malloc(2048 * sizeof(char));
+	}
 	return server;
 }
 
@@ -76,7 +81,8 @@ void chat_server_delete(struct chat_server *server)
 	{
 		free(server->peers[i].outbox);
 	}
-	free(server->buffer);
+	for(int i = 0; i < 1024; i++)
+		free(server->buffer[i]);
 	free(server);
 }
 
@@ -228,18 +234,27 @@ int chat_server_update(struct chat_server *server, double timeout)
 		if (events[i].events & EPOLLIN && events[i].data.fd != server->socket)
 		{
 			int total_bytes_read = 0;
+			int peer_idx;
+			for(int x = 0; x < server->peers_size; x++)
+			{
+				if(events[i].data.fd == server->peers[x].socket)
+				{
+					peer_idx = x;
+					break;
+				}
+			}
 			while (true)
 			{
-				int bytes_read = recv(events[i].data.fd, server->buffer + server->buff_size, server->buff_capacity - server->buff_size, MSG_DONTWAIT);
+				int bytes_read = recv(events[i].data.fd, server->buffer[peer_idx] + server->buff_size[peer_idx], server->buff_capacity[peer_idx] - server->buff_size[peer_idx], MSG_DONTWAIT);
 
 				if (bytes_read <= 0)
 					break;
 				total_bytes_read += bytes_read;
-				server->buff_size += bytes_read;
-				if (server->buff_size + 1 >= server->buff_capacity)
+				server->buff_size[peer_idx] += bytes_read;
+				if (server->buff_size[peer_idx] + 1 >= server->buff_capacity[peer_idx])
 				{
-					server->buff_capacity *= 2;
-					server->buffer = realloc(server->buffer, server->buff_capacity);
+					server->buff_capacity[peer_idx] *= 2;
+					server->buffer[peer_idx] = realloc(server->buffer[peer_idx], server->buff_capacity[peer_idx]);
 				}
 			}
 			if (total_bytes_read == 0)
@@ -255,6 +270,10 @@ int chat_server_update(struct chat_server *server, double timeout)
 					{
 						free(server->peers[j].outbox);
 						server->peers[j].outbox = NULL;
+						free(server->buffer[peer_idx]);
+						server->buffer[peer_idx] = malloc(2048 * sizeof(char));
+						server->buff_size[peer_idx] = 0;
+						server->buff_capacity[peer_idx] = 2048;
 						close(server->peers[j].socket);
 						closed = true;
 						epoll_ctl(server->epollfd, EPOLL_CTL_DEL, events[i].data.fd, &events[i]);
@@ -265,16 +284,16 @@ int chat_server_update(struct chat_server *server, double timeout)
 			int start = 0;
 			for (int idx = 0; idx < total_bytes_read; idx++)
 			{
-				if (server->buffer[idx] == '\0' && start == idx)
+				if (server->buffer[peer_idx][idx] == '\0' && start == idx)
 				{
 					start++;
 				}
-				if (server->buffer[idx] == '\n')
+				if (server->buffer[peer_idx][idx] == '\n')
 				{
 					int size = idx - start;
 					struct chat_message *msg = malloc(sizeof(struct chat_message));
 					msg->data = calloc(size + 1, sizeof(char));
-					memcpy(msg->data, server->buffer + start, size);
+					memcpy(msg->data, server->buffer[peer_idx] + start, size);
 					msg->data[size] = '\0';
 					msg->size = size;
 					server->to_be_sent[server->recieved] = msg;
@@ -301,22 +320,24 @@ int chat_server_update(struct chat_server *server, double timeout)
 					// free(buffer);
 					return CHAT_ERR_SYS;
 				}
-				server->peers[j].outbox = realloc(server->peers[j].outbox, server->peers[j].outbox_size + total_bytes_read + 1);
-				memcpy(server->peers[j].outbox + server->peers[j].outbox_size, server->buffer, total_bytes_read);
-				server->peers[j].outbox_size += total_bytes_read;
+				server->peers[j].outbox = realloc(server->peers[j].outbox, server->peers[j].outbox_size + start + 1);
+				memcpy(server->peers[j].outbox + server->peers[j].outbox_size, server->buffer[peer_idx], start);
+				// server->peers[j].outbox[start] = '\0';
+				server->peers[j].outbox_size += start;
 			}
-			if (start == server->buff_size)
+			if (start == server->buff_size[peer_idx])
 			{
-				free(server->buffer);
-				server->buffer = malloc(2048 * sizeof(char));
-				server->buff_capacity = 2048;
-				server->buff_size = 0;
+				free(server->buffer[peer_idx]);
+				// while(server->buffer == NULL)
+				server->buffer[peer_idx] = malloc(2048 * sizeof(char));
+				server->buff_capacity[peer_idx] = 2048;
+				server->buff_size[peer_idx] = 0;
 			}
 			else
 			{
-				int rest = server->buff_size - start;
-				memmove(server->buffer, server->buffer + start, rest);
-				server->buff_size -= start;
+				int rest = server->buff_size[peer_idx] - start;
+				memmove(server->buffer[peer_idx], server->buffer[peer_idx] + start, rest);
+				server->buff_size[peer_idx] -= start;
 			}
 		}
 		if (events[i].events & EPOLLOUT)
@@ -332,7 +353,11 @@ int chat_server_update(struct chat_server *server, double timeout)
 					}
 					continue;
 				}
-
+				if(server->peers[idx].outbox[server->peers[idx].outbox_size - 1] != '\0')
+				{
+					server->peers[idx].outbox = realloc(server->peers[idx].outbox, server->peers[idx].outbox_size + 1);
+					server->peers[idx].outbox[server->peers[idx].outbox_size] = '\0';
+				}
 				int total_bytes_sent = 0;
 
 				while ((int)total_bytes_sent < server->peers[idx].outbox_size)
@@ -348,10 +373,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 							{
 								break;
 							}
-							// if (server->peers[idx].outbox[server->peers[idx].outbox_size - 1] == '\0')
-							// {
-							// 	rest--;
-							// }
+							
 							memmove(server->peers[idx].outbox, server->peers[idx].outbox + total_bytes_sent, rest);
 							server->peers[idx].outbox_size = rest;
 						}
