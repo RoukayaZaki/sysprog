@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <string.h>
@@ -10,18 +11,18 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
 // return last command status
-static void
-execute_command_line(const struct command_line *line)
+static int
+execute_command_line(struct command_line *line, struct parser *p)
 {
 	assert(line != NULL);
 
+	int last_status = 0;
 	if (line->is_background)
 	{
 		int pid = fork();
 		if (pid != 0)
-			return;
+			return last_status;
 	}
-
 	int stdout = dup(STDOUT_FILENO);
 	if (line->out_type == OUTPUT_TYPE_STDOUT)
 	{
@@ -47,14 +48,25 @@ execute_command_line(const struct command_line *line)
 			pipes_num++;
 	}
 	int pipes[pipes_num][2];
-	for(int i = 0; i < pipes_num; i++)
+	for (int i = 0; i < pipes_num; i++)
 	{
 		pipe(pipes[i]);
 	}
 	// int last_exit_code = 0;
 	bool read_from_pipe = false;
-	int last_status, forks = 0;
+	int forks = 0;
 	const struct expr *e = line->head;
+	if (strcmp(e->cmd.exe, "exit") == 0 && e->next == NULL)
+	{
+		if (e->cmd.arg_count > 0)
+		{
+			last_status = atoi(e->cmd.args[0]);
+		}
+		command_line_delete(line);
+		parser_delete(p);
+
+		exit(last_status);
+	}
 	while (e != NULL)
 	{
 		if (e->type == EXPR_TYPE_COMMAND)
@@ -68,47 +80,60 @@ execute_command_line(const struct command_line *line)
 			}
 			else
 			{
-				if (strcmp(e->cmd.exe, "exit"))
-				{
-				}
 				// malloc args before forking so it's done just once and can be freed in the parent process
-				char **arguments = malloc(sizeof(char *) * (e->cmd.arg_count + 1 + 1));
-				arguments[0] = strdup(e->cmd.exe);
-				for (uint32_t i = 0; i < e->cmd.arg_count; ++i)
-				{
-					arguments[i + 1] = e->cmd.args[i];
-				}
-				arguments[e->cmd.arg_count + 1] = NULL;
 
 				int pid = fork();
-					forks++;
+				forks++;
 				if (pid == 0)
 				{
-					if(read_from_pipe)
+					char **arguments = malloc(sizeof(char *) * (e->cmd.arg_count + 1 + 1));
+					arguments[0] = strdup(e->cmd.exe);
+					for (uint32_t i = 0; i < e->cmd.arg_count; ++i)
+					{
+						arguments[i + 1] = e->cmd.args[i];
+					}
+					arguments[e->cmd.arg_count + 1] = '\0';
+					if (read_from_pipe)
 					{
 						// close(pipes[pipe_idx - 1][1]);
-						dup2(pipes[pipe_idx -1][0], STDIN_FILENO);
+						dup2(pipes[pipe_idx - 1][0], STDIN_FILENO);
 						// read_from_pipe = false;
 					}
-					if(e->next != NULL && e->next->type == EXPR_TYPE_PIPE)
+					if (e->next != NULL && e->next->type == EXPR_TYPE_PIPE)
 					{
 						close(pipes[pipe_idx][0]);
 						dup2(pipes[pipe_idx][1], STDOUT_FILENO);
 					}
-					// printf("HERE\n");
-					
-					execvp(e->cmd.exe, arguments);
-					// perror("execvp");
-					exit(0);
+					int status = execvp(e->cmd.exe, arguments);
+					command_line_delete(line);
+					parser_delete(p);
+					free(arguments[0]);
+					free(arguments);
+					exit(status);
 				}
-				// if(pid != 0)
-				// 	waitpid(pid, &last_status, 0);
-				if(read_from_pipe)
+				if (e->next == NULL || e->next->type != EXPR_TYPE_PIPE)
+				{
+					int wait_var;
+					waitpid(pid, &wait_var, 0);
+					last_status = WEXITSTATUS(wait_var);
+					forks--;
+				}
+				if (strcmp(e->cmd.exe, "exit") == 0)
+				{
+					if (e->cmd.arg_count > 0)
+					{
+						last_status = atoi(e->cmd.args[0]);
+						// printf("saw exit: %d\n", *last_status);
+					}
+					else
+						last_status = 0;
+				}
+
+				if (read_from_pipe)
 				{
 					close(pipes[pipe_idx - 1][0]);
 					read_from_pipe = false;
 				}
-				free(arguments);
 			}
 		}
 		else if (e->type == EXPR_TYPE_PIPE)
@@ -134,9 +159,11 @@ execute_command_line(const struct command_line *line)
 		e = e->next;
 	}
 	// for(int i = 0; i < pipes_num; i++) close(pipes[i][0]);
-	while(forks--)
-		wait(&last_status);
+	int wait_status;
+	while (forks--)
+		wait(&wait_status);
 	dup2(stdout, STDOUT_FILENO);
+	return last_status;
 }
 
 int main(void)
@@ -144,6 +171,7 @@ int main(void)
 	const size_t buf_size = 1024;
 	char buf[buf_size];
 	int rc;
+	int last_status = 0;
 	struct parser *p = parser_new();
 	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0)
 	{
@@ -159,10 +187,10 @@ int main(void)
 				printf("Error: %d\n", (int)err);
 				continue;
 			}
-			execute_command_line(line);
+			last_status = execute_command_line(line, p);
 			command_line_delete(line);
 		}
 	}
 	parser_delete(p);
-	return 0;
+	return last_status;
 }
