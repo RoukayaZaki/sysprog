@@ -55,6 +55,8 @@ execute_command_line(struct command_line *line, struct parser *p)
 	// int last_exit_code = 0;
 	bool read_from_pipe = false;
 	int forks = 0;
+	int wait_var;
+
 	const struct expr *e = line->head;
 	if (strcmp(e->cmd.exe, "exit") == 0 && e->next == NULL)
 	{
@@ -92,7 +94,7 @@ execute_command_line(struct command_line *line, struct parser *p)
 					{
 						arguments[i + 1] = e->cmd.args[i];
 					}
-					arguments[e->cmd.arg_count + 1] = '\0';
+					arguments[e->cmd.arg_count + 1] = NULL;
 					if (read_from_pipe)
 					{
 						// close(pipes[pipe_idx - 1][1]);
@@ -113,7 +115,6 @@ execute_command_line(struct command_line *line, struct parser *p)
 				}
 				if (e->next == NULL || e->next->type != EXPR_TYPE_PIPE)
 				{
-					int wait_var;
 					waitpid(pid, &wait_var, 0);
 					last_status = WEXITSTATUS(wait_var);
 					forks--;
@@ -145,12 +146,34 @@ execute_command_line(struct command_line *line, struct parser *p)
 		else if (e->type == EXPR_TYPE_AND)
 		{
 			// printf("\tAND\n");
+			bool flag = true;
+			int wait_status;
+			while (forks--)
+			{
+				wait(&wait_status);
+				if(wait_status != 0) flag = false;
+			}
+			if (wait_var != 0 || flag == false)
+			{
+				return last_status;
+			}
 			read_from_pipe = false;
 		}
 		else if (e->type == EXPR_TYPE_OR)
 		{
 			// printf("\tOR\n");
 			read_from_pipe = false;
+			bool flag = true;
+			int wait_status;
+			while (forks--)
+			{
+				wait(&wait_status);
+				if(wait_status != 0) flag = false;
+			}
+			if (wait_var == 0 && flag)
+			{
+				return last_status;
+			}
 		}
 		else
 		{
