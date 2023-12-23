@@ -218,16 +218,13 @@ int main(void)
 				// backgrounds_pids[backgrounds] = last_status;
 				backgrounds++;
 				last_status = 0;
-				if (backgrounds > 1024)
+				int x = backgrounds;
+				while (x--)
 				{
-					int x = 1024;
-					while (x--)
-					{
-						int status = waitpid(-1, NULL, WNOHANG);
-						if (status != 0)
-							backgrounds--;
-						// wait(NULL);
-					}
+					int status = waitpid(-1, NULL, WNOHANG);
+					if (status != 0)
+						backgrounds--;
+					// wait(NULL);
 				}
 			}
 			else
