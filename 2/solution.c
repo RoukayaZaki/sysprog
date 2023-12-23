@@ -12,7 +12,7 @@
 #include <fcntl.h>
 // return last command status
 static int
-execute_command_line(struct command_line *line, struct parser *p, int backgrounds, int* backgrounds_pids)
+execute_command_line(struct command_line *line, struct parser *p, int* backgrounds, int* backgrounds_pids)
 {
 	assert(line != NULL);
 
@@ -64,9 +64,10 @@ execute_command_line(struct command_line *line, struct parser *p, int background
 		{
 			last_status = atoi(e->cmd.args[0]);
 		}
-		while(backgrounds--)
+		while(*backgrounds > 0)
 		{
-			waitpid(backgrounds_pids[backgrounds], NULL, 0);
+			*backgrounds = *backgrounds - 1;
+			waitpid(backgrounds_pids[*backgrounds],NULL, 0);
 		}
 		command_line_delete(line);
 		parser_delete(p);
@@ -175,6 +176,12 @@ execute_command_line(struct command_line *line, struct parser *p, int background
 	while (forks--)
 		wait(&wait_status);
 	dup2(stdout, STDOUT_FILENO);
+	if(line->is_background)
+	{
+		command_line_delete(line);
+		parser_delete(p);
+		exit(0);
+	}
 	return last_status;
 }
 
@@ -201,7 +208,7 @@ int main(void)
 				continue;
 			}
 			int new_status = last_status;
-			new_status = execute_command_line(line, p, backgrounds, backgrounds_pids);
+			new_status = execute_command_line(line, p, &backgrounds, backgrounds_pids);
 			if(line->is_background)
 			{
 				backgrounds_pids[backgrounds] = last_status;
