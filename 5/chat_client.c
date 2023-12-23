@@ -199,10 +199,6 @@ int chat_client_update(struct chat_client *client, double timeout)
 			{
 				break;
 			}
-			else if(bytes_read == 0)
-			{
-				break;
-			}
 			else
 			{
 				total_bytes_read += bytes_read;
@@ -259,7 +255,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 	{
 		client->sent_buffer = realloc(client->sent_buffer, client->size + 1);
 		client->sent_buffer[client->size] = '\0';
-		client->size++;
+		// client->size++;
 		int total_bytes_sent = 0;
 		while ((int)total_bytes_sent < client->size)
 		{
@@ -270,7 +266,7 @@ int chat_client_update(struct chat_client *client, double timeout)
 				{
 					int rest = client->size - total_bytes_sent;
 					if(rest <= 0) break;
-					if(client->sent_buffer[client->size - 1] == '\0')
+					if(client->sent_buffer[client->size] == '\0')
 					{
 						rest--;
 					}
