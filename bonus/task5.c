@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <stdlib.h>
-
+#include <stdbool.h>
 #define REPEAT_COUNT 5
 
 #define NUM_THREADS 3
@@ -14,8 +14,12 @@ atomic_uint counter = 0;
 
 void *increment_function(void *order)
 {
-    if (atomic_fetch_add_explicit(&counter, 1, (memory_order)order) >= MAX_VALUE - 1)
-        return NULL;
+    while (true)
+    {
+        if (atomic_fetch_add_explicit(&counter, 1, (memory_order)order) >= MAX_VALUE - 1)
+            return NULL;
+    }
+    return NULL;
 }
 
 double bench_threads(int num_threads, memory_order order)
