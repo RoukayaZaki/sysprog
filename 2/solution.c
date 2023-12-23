@@ -12,7 +12,7 @@
 #include <fcntl.h>
 // return last command status
 static int
-execute_command_line(struct command_line *line, struct parser *p)
+execute_command_line(struct command_line *line, struct parser *p, int backgrounds, int* backgrounds_pids)
 {
 	assert(line != NULL);
 
@@ -21,7 +21,7 @@ execute_command_line(struct command_line *line, struct parser *p)
 	{
 		int pid = fork();
 		if (pid != 0)
-			return -pid;
+			return pid;
 	}
 	int stdout = dup(STDOUT_FILENO);
 	if (line->out_type == OUTPUT_TYPE_STDOUT)
@@ -64,9 +64,12 @@ execute_command_line(struct command_line *line, struct parser *p)
 		{
 			last_status = atoi(e->cmd.args[0]);
 		}
+		while(backgrounds--)
+		{
+			waitpid(backgrounds_pids[backgrounds], NULL, 0);
+		}
 		command_line_delete(line);
 		parser_delete(p);
-
 		exit(last_status);
 	}
 	while (e != NULL)
@@ -77,7 +80,7 @@ execute_command_line(struct command_line *line, struct parser *p)
 			{
 				if (chdir(e->cmd.args[0]) != 0)
 				{
-					perror("chdir");
+					// perror("chdir");
 				}
 			}
 			else
@@ -197,13 +200,15 @@ int main(void)
 				printf("Error: %d\n", (int)err);
 				continue;
 			}
-			last_status = execute_command_line(line, p);
-			if(last_status < 0)
+			int new_status = last_status;
+			new_status = execute_command_line(line, p, backgrounds, backgrounds_pids);
+			if(line->is_background)
 			{
-				backgrounds_pids[backgrounds] = -last_status;
+				backgrounds_pids[backgrounds] = last_status;
 				backgrounds++;
 				last_status = 0;
 			}
+			else last_status = new_status;
 			command_line_delete(line);
 		}
 	}
