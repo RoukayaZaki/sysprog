@@ -12,7 +12,7 @@
 #include <fcntl.h>
 // return last command status
 static int
-execute_command_line(struct command_line *line, struct parser *p, int* backgrounds, int* backgrounds_pids)
+execute_command_line(struct command_line *line, struct parser *p, int* backgrounds)
 {
 	assert(line != NULL);
 
@@ -67,7 +67,8 @@ execute_command_line(struct command_line *line, struct parser *p, int* backgroun
 		while(*backgrounds > 0)
 		{
 			*backgrounds = *backgrounds - 1;
-			waitpid(backgrounds_pids[*backgrounds],NULL, 0);
+			// waitpid(backgrounds_pids[*backgrounds],NULL, 0);
+			wait(NULL);
 		}
 		command_line_delete(line);
 		parser_delete(p);
@@ -191,7 +192,7 @@ int main(void)
 	char buf[buf_size];
 	int rc;
 	int last_status = 0, backgrounds = 0;
-	int backgrounds_pids[1024];
+	// int backgrounds_pids[1024];
 	struct parser *p = parser_new();
 	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0)
 	{
@@ -208,10 +209,10 @@ int main(void)
 				continue;
 			}
 			int new_status = last_status;
-			new_status = execute_command_line(line, p, &backgrounds, backgrounds_pids);
+			new_status = execute_command_line(line, p, &backgrounds);
 			if(line->is_background)
 			{
-				backgrounds_pids[backgrounds] = last_status;
+				// backgrounds_pids[backgrounds] = last_status;
 				backgrounds++;
 				last_status = 0;
 			}
@@ -221,7 +222,8 @@ int main(void)
 	}
 	while (backgrounds--)
 	{
-		waitpid(backgrounds_pids[backgrounds], NULL, 0);
+		// waitpid(backgrounds_pids[backgrounds], NULL, 0);
+		wait(NULL);
 	}
 	
 	parser_delete(p);
