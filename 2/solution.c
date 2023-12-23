@@ -12,7 +12,7 @@
 #include <fcntl.h>
 // return last command status
 static int
-execute_command_line(struct command_line *line, struct parser *p, int* backgrounds)
+execute_command_line(struct command_line *line, struct parser *p, int *backgrounds)
 {
 	assert(line != NULL);
 
@@ -64,12 +64,15 @@ execute_command_line(struct command_line *line, struct parser *p, int* backgroun
 		{
 			last_status = atoi(e->cmd.args[0]);
 		}
-		while(*backgrounds > 0)
+		while (*backgrounds > 0)
 		{
-			*backgrounds = *backgrounds - 1;
+			int status = waitpid(-1, NULL, WNOHANG);
+			if (status != 0)
+				*backgrounds = *backgrounds - 1;
 			// waitpid(backgrounds_pids[*backgrounds],NULL, 0);
-			wait(NULL);
+			// wait(NULL);
 		}
+
 		command_line_delete(line);
 		parser_delete(p);
 		exit(last_status);
@@ -150,7 +153,7 @@ execute_command_line(struct command_line *line, struct parser *p, int* backgroun
 		}
 		else if (e->type == EXPR_TYPE_AND)
 		{
-			
+
 			if (last_status != 0)
 			{
 				e = e->next;
@@ -160,7 +163,7 @@ execute_command_line(struct command_line *line, struct parser *p, int* backgroun
 		else if (e->type == EXPR_TYPE_OR)
 		{
 			read_from_pipe = false;
-			
+
 			if (last_status == 0)
 			{
 				e = e->next;
@@ -177,7 +180,7 @@ execute_command_line(struct command_line *line, struct parser *p, int* backgroun
 	while (forks--)
 		wait(&wait_status);
 	dup2(stdout, STDOUT_FILENO);
-	if(line->is_background)
+	if (line->is_background)
 	{
 		command_line_delete(line);
 		parser_delete(p);
@@ -210,22 +213,36 @@ int main(void)
 			}
 			int new_status = last_status;
 			new_status = execute_command_line(line, p, &backgrounds);
-			if(line->is_background)
+			if (line->is_background)
 			{
 				// backgrounds_pids[backgrounds] = last_status;
 				backgrounds++;
 				last_status = 0;
+				if (backgrounds > 1024)
+				{
+					int x = 1024;
+					while (x--)
+					{
+						int status = waitpid(-1, NULL, WNOHANG);
+						if (status != 0)
+							backgrounds--;
+						// wait(NULL);
+					}
+				}
 			}
-			else last_status = new_status;
+			else
+				last_status = new_status;
 			command_line_delete(line);
 		}
 	}
-	while (backgrounds--)
+	while (backgrounds)
 	{
-		// waitpid(backgrounds_pids[backgrounds], NULL, 0);
-		wait(NULL);
+		int status = waitpid(-1, NULL, WNOHANG);
+		if (status != 0)
+			backgrounds--;
+		// wait(NULL);
 	}
-	
+
 	parser_delete(p);
 	return last_status;
 }
