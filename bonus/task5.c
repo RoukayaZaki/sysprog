@@ -12,12 +12,10 @@
 
 atomic_uint counter = 0;
 
-void *increment_function(void *order) {
-    while(counter < MAX_VALUE)
-    {
-        atomic_fetch_add_explicit(&counter, 1, (memory_order)order);
-    }
-    return NULL;
+void *increment_function(void *order)
+{
+    if (atomic_fetch_add_explicit(&counter, 1, (memory_order)order) >= MAX_VALUE - 1)
+        return NULL;
 }
 
 double bench_threads(int num_threads, memory_order order)
@@ -27,7 +25,7 @@ double bench_threads(int num_threads, memory_order order)
     pthread_t tid[num_threads];
     for (int i = 0; i < num_threads; i++)
     {
-        pthread_create(&tid[i], NULL, increment_function, (void*)order);
+        pthread_create(&tid[i], NULL, increment_function, (void *)order);
     }
     for (int i = 0; i < num_threads; i++)
     {
@@ -48,7 +46,7 @@ int main()
     scanf("%d", &num_threads);
     printf("100 mln increments with %d threads and relaxed order\n", num_threads);
     double benching_results[REPEAT_COUNT];
-    for(int i = 0; i < REPEAT_COUNT; i++)
+    for (int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
         benching_results[i] = bench_threads(num_threads, memory_order_relaxed);
@@ -59,7 +57,7 @@ int main()
 
     scanf("%d", &num_threads);
     printf("100 mln increments with %d threads and relaxed order\n", num_threads);
-    for(int i = 0; i < REPEAT_COUNT; i++)
+    for (int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
         benching_results[i] = bench_threads(num_threads, memory_order_relaxed);
@@ -71,7 +69,7 @@ int main()
     counter = 0;
     scanf("%d", &num_threads);
     printf("100 mln increments with %d threads and sequentially consistent order\n", num_threads);
-    for(int i = 0; i < REPEAT_COUNT; i++)
+    for (int i = 0; i < REPEAT_COUNT; i++)
     {
         counter = 0;
         benching_results[i] = bench_threads(num_threads, memory_order_seq_cst);
