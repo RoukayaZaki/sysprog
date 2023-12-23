@@ -19,6 +19,7 @@ tests = [
 "cd testdir",
 'pwd | tail -c 8',
 '   pwd | tail -c 8',
+'echo \"a\n\n\n\nb\" | cat -s',
 ],
 [
 "touch \"my file with whitespaces in name.txt\"",
@@ -59,7 +60,7 @@ tests = [
 	"f = open('test.txt', 'w')\\n\\\n"\
 	"f.write('Text\\\\\\n')\\n\\\n"\
 	"f.close()\\n\" > test.py",
-"python test.py | exit 123",
+"python test.py | exit 0",
 "cat test.txt",
 ],
 [
@@ -134,7 +135,7 @@ for i in range(line_count):
 	print(output[i])
 	if output[i] != etalon[i]:
 		print('Error in line {}. '\
-		      '\n\tExpected: "{}"'.format(i + 1, etalon[i]))
+		      'Expected:\n{}'.format(i + 1, etalon[i]))
 		is_error = True
 		break
 if not is_error and etalon_len != output_len:

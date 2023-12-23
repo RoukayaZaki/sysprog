@@ -21,7 +21,7 @@ execute_command_line(struct command_line *line, struct parser *p)
 	{
 		int pid = fork();
 		if (pid != 0)
-			return last_status;
+			return -pid;
 	}
 	int stdout = dup(STDOUT_FILENO);
 	if (line->out_type == OUTPUT_TYPE_STDOUT)
@@ -145,34 +145,20 @@ execute_command_line(struct command_line *line, struct parser *p)
 		}
 		else if (e->type == EXPR_TYPE_AND)
 		{
-			// printf("\tAND\n");
-			bool flag = true;
-			int wait_status;
-			while (forks--)
+			
+			if (last_status != 0)
 			{
-				wait(&wait_status);
-				if(wait_status != 0) flag = false;
-			}
-			if (wait_var != 0 || flag == false)
-			{
-				return last_status;
+				e = e->next;
 			}
 			read_from_pipe = false;
 		}
 		else if (e->type == EXPR_TYPE_OR)
 		{
-			// printf("\tOR\n");
 			read_from_pipe = false;
-			bool flag = true;
-			int wait_status;
-			while (forks--)
+			
+			if (last_status == 0)
 			{
-				wait(&wait_status);
-				if(wait_status != 0) flag = false;
-			}
-			if (wait_var == 0 && flag)
-			{
-				return last_status;
+				e = e->next;
 			}
 		}
 		else
@@ -194,7 +180,8 @@ int main(void)
 	const size_t buf_size = 1024;
 	char buf[buf_size];
 	int rc;
-	int last_status = 0;
+	int last_status = 0, backgrounds = 0;
+	int backgrounds_pids[1024];
 	struct parser *p = parser_new();
 	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0)
 	{
@@ -211,9 +198,20 @@ int main(void)
 				continue;
 			}
 			last_status = execute_command_line(line, p);
+			if(last_status < 0)
+			{
+				backgrounds_pids[backgrounds] = -last_status;
+				backgrounds++;
+				last_status = 0;
+			}
 			command_line_delete(line);
 		}
 	}
+	while (backgrounds--)
+	{
+		waitpid(backgrounds_pids[backgrounds], NULL, 0);
+	}
+	
 	parser_delete(p);
 	return last_status;
 }
